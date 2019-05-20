@@ -21,19 +21,10 @@ const SYSLOG_UDP_PORT: u16 = 514;
 const SERVER4: Token = Token(0);
 const SERVER6: Token = Token(1);
 
-// common receive routine
-fn receive(sock: &UdpSocket, buf: &mut BytesMut) {
-    let (len, from) = sock
-        .recv_from(buf.as_mut().into())
-        .expect("recvfrom errors");
-    println!("recv {} bytes from {:?}", len, from);
-}
-
 fn main() {
-    //let mut buffer = [0u8; 4096];
     let mut events = Events::with_capacity(1024);
     let poll = Poll::new().expect("Poll::new() failed");
-    let mut buf = BytesMut::with_capacity(4096);
+    let mut buffer = [0; 4096];
 
     // listen to anyone
     let udp4_server_s =
@@ -83,10 +74,25 @@ fn main() {
         poll.poll(&mut events, None).expect("poll.poll failed");
         for event in events.iter() {
             match event.token() {
-                SERVER4 => receive(&udp4_server_mio, &mut buf),
-                SERVER6 => receive(&udp6_server_mio, &mut buf),
+                SERVER4 => receive(&udp4_server_mio, &mut buffer),
+                SERVER6 => receive(&udp6_server_mio, &mut buffer),
                 _ => (),
             }
         }
     }
+}
+
+// common receive routine
+fn receive(sock: &UdpSocket, buf: &mut [u8]) {
+    let (len, from) = sock
+        .recv_from(buf.as_mut().into())
+        .expect("recvfrom errors");
+    let mut bytes = BytesMut::from(buf.as_ref());
+    bytes.truncate(len);
+    parse_msg(from, &mut bytes);
+}
+
+// decode packet
+fn parse_msg(from: SocketAddr, bytes: &mut BytesMut) {
+    println!("recv {} bytes from {:?}", bytes.len(), from);
 }
