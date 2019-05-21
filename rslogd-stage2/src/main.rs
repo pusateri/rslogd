@@ -11,11 +11,12 @@
 //! If socket cannot bind to syslog UDP port 514 (permissions or already in use)
 //!
 
-use bytes::BytesMut;
 use mio::net::UdpSocket;
 use mio::{Events, Poll, PollOpt, Ready, Token};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+
+mod syslog;
 
 const SYSLOG_UDP_PORT: u16 = 514;
 const SERVER4: Token = Token(0);
@@ -84,15 +85,9 @@ fn main() {
 
 // common receive routine
 fn receive(sock: &UdpSocket, buf: &mut [u8]) {
-    let (len, from) = sock
-        .recv_from(buf.as_mut().into())
-        .expect("recvfrom errors");
-    let mut bytes = BytesMut::from(buf.as_ref());
-    bytes.truncate(len);
-    parse_msg(from, &mut bytes);
-}
-
-// decode packet
-fn parse_msg(from: SocketAddr, bytes: &mut BytesMut) {
-    println!("recv {} bytes from {:?}", bytes.len(), from);
+    let (len, from) = sock.recv_from(buf).expect("recvfrom errors");
+    //println!("rslogd: {:?}", String::from_utf8(buf[0..len].to_vec()));
+    if let Some(msg) = syslog::parse(from, len, buf) {
+        println!("{:?}", msg);
+    }
 }
