@@ -375,6 +375,7 @@ pub fn parse(from: SocketAddr, len: usize, buf: &[u8]) -> Option<SyslogMsg> {
 
     // check for Apple Syslog Log (asl) format
     if pri_len == 0 {
+        // the first 10 characters should be length of the asl message.
         if len < 10 {
             return None;
         }
