@@ -86,8 +86,10 @@ fn main() {
 // common receive routine
 fn receive(sock: &UdpSocket, buf: &mut [u8]) {
     let (len, from) = sock.recv_from(buf).expect("recvfrom errors");
-    //println!("rslogd: {:?}", String::from_utf8(buf[0..len].to_vec()));
+
     if let Some(msg) = syslog::parse(from, len, buf) {
         println!("{:?}", msg);
+    } else {
+        println!("error parsing: {:?}", String::from_utf8(buf[0..len].to_vec()));
     }
 }
