@@ -90,6 +90,9 @@ fn receive(sock: &UdpSocket, buf: &mut [u8]) {
     if let Some(msg) = syslog::parse(from, len, buf) {
         println!("{:?}", msg);
     } else {
-        println!("error parsing: {:?}", String::from_utf8(buf[0..len].to_vec()));
+        println!(
+            "error parsing: {:?}",
+            String::from_utf8(buf[0..len].to_vec())
+        );
     }
 }

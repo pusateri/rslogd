@@ -1,6 +1,6 @@
 use chrono::prelude::*;
-use std::net::SocketAddr;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::str;
 
 // ASL facility codes
@@ -29,51 +29,6 @@ const LOG_LOCAL5: u8 = 21;
 const LOG_LOCAL6: u8 = 22;
 const LOG_LOCAL7: u8 = 23;
 const LOG_LAUNCHD: u8 = 24;
-
-fn syslog_parse_asl_facility_name(name: &str) -> u8 {
-    match name {
-        "auth" => LOG_AUTH,
-        "authpriv" => LOG_AUTHPRIV,
-        "cron" => LOG_CRON,
-        "daemon" => LOG_DAEMON,
-        "ftp" => LOG_FTP,
-        "install" => LOG_INSTALL,
-        "kern" => LOG_KERN,
-        "lpr" => LOG_LPR,
-        "mail" => LOG_MAIL,
-        "netinfo" => LOG_NETINFO,
-        "remoteauth" => LOG_REMOTEAUTH,
-        "news" => LOG_NEWS,
-        "security" => LOG_AUTH,
-        "syslog" => LOG_SYSLOG,
-        "user" => LOG_USER,
-        "uucp" => LOG_UUCP,
-        "local0" => LOG_LOCAL0,
-        "local1" => LOG_LOCAL1,
-        "local2" => LOG_LOCAL2,
-        "local3" => LOG_LOCAL3,
-        "local4" => LOG_LOCAL4,
-        "local5" => LOG_LOCAL5,
-        "local6" => LOG_LOCAL6,
-        "local7" => LOG_LOCAL7,
-        "launchd" => LOG_LAUNCHD,
-        _ => LOG_USER,
-    }
-}
-
-#[derive(Debug)]
-pub struct SyslogMsg {
-    from: SocketAddr,
-    facility: u8,
-    severity: u8,
-    version: u8,
-    timestamp: Option<DateTime<Utc>>,
-    hostname: Option<String>,
-    appname: Option<String>,
-    procid: Option<String>,
-    sdata: Option<HashMap<String, String>>,
-    msg: Option<String>,
-}
 
 trait SliceExt {
     fn slice_until_space(&self) -> &Self;
@@ -143,6 +98,231 @@ impl SliceExt for [u8] {
     }
 }
 
+#[derive(Debug)]
+pub struct SyslogMsg {
+    from: SocketAddr,
+    facility: u8,
+    severity: u8,
+    version: u8,
+    timestamp: Option<DateTime<Utc>>,
+    hostname: Option<String>,
+    appname: Option<String>,
+    procid: Option<String>,
+    sdata: Option<HashMap<String, String>>,
+    msg: Option<String>,
+}
+
+impl SyslogMsg {
+    fn from_version_1(
+        from: SocketAddr,
+        len: usize,
+        buf: &[u8],
+        mut first: usize,
+        vstr: &str,
+        facility: u8,
+        severity: u8,
+    ) -> Option<Self> {
+        first += vstr.len();
+        let version = vstr.parse::<u8>().expect("version parse");
+
+        while buf[first] == b' ' {
+            first += 1;
+        }
+
+        let mut timestamp: Option<DateTime<Utc>> = None;
+        if let Some(tstr) = syslog_parse_opt_string(buf, &mut first, &len) {
+            timestamp = match DateTime::parse_from_rfc3339(&tstr) {
+                Ok(ts) => Some(ts.with_timezone(&Utc)),
+                Err(_why) => {
+                    if tstr == "_" {
+                        None
+                    } else {
+                        return None;
+                    }
+                }
+            };
+        };
+
+        let hostname = syslog_parse_opt_string(buf, &mut first, &len);
+        let appname = syslog_parse_opt_string(buf, &mut first, &len);
+        let procid = syslog_parse_opt_string(buf, &mut first, &len);
+
+        // structured data may be missing ("-") or will be enclosed in "[", "]"
+        let sd: Option<HashMap<String, String>> = if buf[first] == b'-' {
+            first += 2;
+            None
+        } else {
+            None
+        };
+
+        // the remainder of buf
+        let msg = match String::from_utf8(buf[first..len].to_vec()) {
+            Ok(m) => Some(m),
+            Err(_why) => None,
+        };
+        Some(SyslogMsg {
+            from: from,
+            facility: facility,
+            severity: severity,
+            version: version,
+            timestamp: timestamp,
+            hostname: hostname,
+            appname: appname,
+            procid: procid,
+            sdata: sd,
+            msg: msg,
+        })
+    }
+
+    fn from_bsd(
+        from: SocketAddr,
+        len: usize,
+        buf: &[u8],
+        mut first: usize,
+        facility: u8,
+        severity: u8,
+    ) -> Option<Self> {
+        let local: DateTime<Local> = Local::now();
+        let ts = format!(
+            "{} {}",
+            local.format("%z %Y"),
+            str::from_utf8(&buf[first..first + 15]).unwrap()
+        );
+        first += 15;
+        let timestamp = match DateTime::parse_from_str(&ts, "%z %Y %b %e %H:%M:%S") {
+            Ok(ts) => ts,
+            Err(_why) => return None,
+        };
+
+        while buf[first] == b' ' {
+            first += 1;
+        }
+        let hostname = syslog_parse_opt_string(buf, &mut first, &len);
+
+        // the remainder of buf
+        let msg = match String::from_utf8(buf[first..len].to_vec()) {
+            Ok(m) => Some(m),
+            Err(_why) => None,
+        };
+
+        Some(SyslogMsg {
+            from: from,
+            facility: facility,
+            severity: severity,
+            version: 0,
+            timestamp: Some(timestamp.with_timezone(&Utc)),
+            hostname: hostname,
+            appname: None,
+            procid: None,
+            sdata: None,
+            msg: msg,
+        })
+    }
+
+    fn from_asl(from: SocketAddr, len: usize, buf: &[u8]) -> Option<Self> {
+        fn syslog_parse_asl_facility_name(name: &str) -> u8 {
+            match name {
+                "auth" => LOG_AUTH,
+                "authpriv" => LOG_AUTHPRIV,
+                "cron" => LOG_CRON,
+                "daemon" => LOG_DAEMON,
+                "ftp" => LOG_FTP,
+                "install" => LOG_INSTALL,
+                "kern" => LOG_KERN,
+                "lpr" => LOG_LPR,
+                "mail" => LOG_MAIL,
+                "netinfo" => LOG_NETINFO,
+                "remoteauth" => LOG_REMOTEAUTH,
+                "news" => LOG_NEWS,
+                "security" => LOG_AUTH,
+                "syslog" => LOG_SYSLOG,
+                "user" => LOG_USER,
+                "uucp" => LOG_UUCP,
+                "local0" => LOG_LOCAL0,
+                "local1" => LOG_LOCAL1,
+                "local2" => LOG_LOCAL2,
+                "local3" => LOG_LOCAL3,
+                "local4" => LOG_LOCAL4,
+                "local5" => LOG_LOCAL5,
+                "local6" => LOG_LOCAL6,
+                "local7" => LOG_LOCAL7,
+                "launchd" => LOG_LAUNCHD,
+                _ => LOG_USER,
+            }
+        }
+
+        let mut first = 0;
+        let lenstr = match str::from_utf8(&buf[0..10]) {
+            Ok(s) => s,
+            Err(_why) => return None,
+        };
+        let mut msglen: usize = match lenstr.trim().parse() {
+            Ok(m) => m,
+            Err(_why) => return None,
+        };
+        first += lenstr.len() + 1;
+
+        let mut sdata: HashMap<String, String> = HashMap::new();
+        while msglen > 0 {
+            let kv_str = buf[first..len].slice_between_brackets();
+            let kv_len = kv_str.len();
+            if kv_len == 0 {
+                break;
+            }
+            msglen -= kv_len;
+            first += kv_len;
+
+            while buf[first] == b' ' {
+                msglen -= 1;
+                first += 1;
+            }
+            let pair: Vec<&str> = str::from_utf8(&kv_str[1..kv_len - 1])
+                .unwrap()
+                .splitn(2, ' ')
+                .collect();
+            sdata.insert(pair[0].to_string(), pair[1].to_string());
+        }
+        let severity = match sdata.remove("Level") {
+            Some(val) => match val.parse() {
+                Ok(num) => num,
+                Err(_e) => return None,
+            },
+            None => return None,
+        };
+        let facility = match sdata.remove("Facility") {
+            Some(val) => syslog_parse_asl_facility_name(&val),
+            None => return None,
+        };
+        let time_sec: i64 = match sdata.remove("Time") {
+            Some(val) => match val.parse() {
+                Ok(num) => num,
+                Err(_e) => return None,
+            },
+            None => return None,
+        };
+        let time_nanosec: u32 = match sdata.remove("TimeNanoSec") {
+            Some(val) => match val.parse() {
+                Ok(num) => num,
+                Err(_e) => return None,
+            },
+            None => return None,
+        };
+        let timestamp = Utc.timestamp(time_sec, time_nanosec);
+        return Some(SyslogMsg {
+            from: from,
+            facility: facility,
+            severity: severity,
+            version: 0,
+            timestamp: Some(timestamp),
+            hostname: Some(sdata.remove("Host").unwrap().to_string()),
+            appname: Some(sdata.remove("Sender").unwrap().to_string()),
+            procid: Some(sdata.remove("PID").unwrap().to_string()),
+            msg: Some(sdata.remove("Message").unwrap().to_string()),
+            sdata: Some(sdata),
+        });
+    }
+}
+
 fn syslog_parse_pri(pri_with_arrows: &[u8]) -> Option<(u8, u8)> {
     let len = pri_with_arrows.len();
     if len < 3 || len > 5 {
@@ -195,78 +375,10 @@ pub fn parse(from: SocketAddr, len: usize, buf: &[u8]) -> Option<SyslogMsg> {
 
     // check for Apple Syslog Log (asl) format
     if pri_len == 0 {
-        if len < 10 { return None; }
-        let lenstr = match str::from_utf8(&buf[0..10]) {
-            Ok(s) => s,
-            Err(_why) => return None,
-        };
-        let mut msglen: usize = match lenstr.trim().parse() {
-            Ok(m) => m,
-            Err(_why) => return None,
-        };
-        first += lenstr.len() + 1;
-
-        let mut sdata: HashMap<String, String> = HashMap::new();
-        while msglen > 0 {
-            let kv_str = buf[first..len].slice_between_brackets();
-            let kv_len = kv_str.len();
-            if kv_len == 0 {
-                break;
-            }
-            msglen -= kv_len;
-            first += kv_len;
-
-            while buf[first] == b' ' {
-                msglen -= 1;
-                first += 1;
-            }
-            let pair: Vec<&str> = str::from_utf8(&kv_str[1..kv_len - 1]).unwrap().splitn(2, ' ').collect();
-            sdata.insert(pair[0].to_string(), pair[1].to_string());
+        if len < 10 {
+            return None;
         }
-        let severity = match sdata.remove("Level") {
-            Some(val) => {
-                match val.parse() {
-                    Ok(num) => num,
-                    Err(_e) => return None,
-                }
-            },
-            None => return None,
-        };
-        let facility = match sdata.remove("Facility") {
-            Some(val) => syslog_parse_asl_facility_name(&val),
-            None => return None,
-        };
-        let time_sec: i64  = match sdata.remove("Time") {
-            Some(val) => {
-                match val.parse() {
-                    Ok(num) => num,
-                    Err(_e) => return None,
-                }
-            },
-            None => return None,
-        };
-        let time_nanosec: u32  = match sdata.remove("TimeNanoSec") {
-            Some(val) => {
-                match val.parse() {
-                    Ok(num) => num,
-                    Err(_e) => return None,
-                }
-            },
-            None => return None,
-        };
-        let timestamp = Utc.timestamp(time_sec, time_nanosec);
-        return Some(SyslogMsg {
-            from: from,
-            facility: facility,
-            severity: severity,
-            version: 0,
-            timestamp: Some(timestamp),
-            hostname: Some(sdata.remove("Host").unwrap().to_string()),
-            appname: Some(sdata.remove("Sender").unwrap().to_string()),
-            procid: Some(sdata.remove("PID").unwrap().to_string()),
-            msg: Some(sdata.remove("Message").unwrap().to_string()),
-            sdata: Some(sdata),
-        });
+        return SyslogMsg::from_asl(from, len, buf);
     }
 
     let (facility, severity) = match syslog_parse_pri(pri_str) {
@@ -282,94 +394,10 @@ pub fn parse(from: SocketAddr, len: usize, buf: &[u8]) -> Option<SyslogMsg> {
     };
     if syslog_version_1(vstr) {
         // assume RFC 5424 format
-
-        first += vstr.len();
-        let version = vstr.parse::<u8>().expect("version parse");
-
-        while buf[first] == b' ' {
-            first += 1;
-        }
-
-        let mut timestamp: Option<DateTime<Utc>> = None;
-        if let Some(tstr) = syslog_parse_opt_string(buf, &mut first, &len) {
-            timestamp = match DateTime::parse_from_rfc3339(&tstr) {
-                Ok(ts) => Some(ts.with_timezone(&Utc)),
-                Err(_why) => {
-                    if tstr == "_" {
-                        None
-                    } else {
-                        return None;
-                    }
-                }
-            };
-        };
-
-        let hostname = syslog_parse_opt_string(buf, &mut first, &len);
-        let appname = syslog_parse_opt_string(buf, &mut first, &len);
-        let procid = syslog_parse_opt_string(buf, &mut first, &len);
-
-        // structured data may be missing ("-") or will be enclosed in "[", "]"
-        let sd: Option<HashMap<String, String>> = if buf[first] == b'-' {
-            first += 2;
-            None
-        } else {
-            None
-        };
-
-        // the remainder of buf
-        let msg = match String::from_utf8(buf[first..len].to_vec()) {
-            Ok(m) => Some(m),
-            Err(_why) => None,
-        };
-        Some(SyslogMsg {
-            from: from,
-            facility: facility,
-            severity: severity,
-            version: version,
-            timestamp: timestamp,
-            hostname: hostname,
-            appname: appname,
-            procid: procid,
-            sdata: sd,
-            msg: msg,
-        })
+        SyslogMsg::from_version_1(from, len, buf, first, vstr, facility, severity)
     } else if syslog_bsd_style(vstr) {
         // assume RFC 3164 format
-        let local: DateTime<Local> = Local::now();
-        let ts = format!(
-            "{} {}",
-            local.format("%z %Y"),
-            str::from_utf8(&buf[first..first + 15]).unwrap()
-        );
-        first += 15;
-        let timestamp = match DateTime::parse_from_str(&ts, "%z %Y %b %e %H:%M:%S") {
-            Ok(ts) => ts,
-            Err(_why) => return None,
-        };
-
-        while buf[first] == b' ' {
-            first += 1;
-        }
-        let hostname = syslog_parse_opt_string(buf, &mut first, &len);
-
-        // the remainder of buf
-        let msg = match String::from_utf8(buf[first..len].to_vec()) {
-            Ok(m) => Some(m),
-            Err(_why) => None,
-        };
-
-        Some(SyslogMsg {
-            from: from,
-            facility: facility,
-            severity: severity,
-            version: 0,
-            timestamp: Some(timestamp.with_timezone(&Utc)),
-            hostname: hostname,
-            appname: None,
-            procid: None,
-            sdata: None,
-            msg: msg,
-        })
+        SyslogMsg::from_bsd(from, len, buf, first, facility, severity)
     } else {
         None
     }
