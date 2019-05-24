@@ -108,6 +108,7 @@ pub struct SyslogMsg {
     hostname: Option<String>,
     appname: Option<String>,
     procid: Option<String>,
+    msgid: Option<String>,
     sdata: Option<HashMap<String, String>>,
     msg: Option<String>,
 }
@@ -146,12 +147,21 @@ impl SyslogMsg {
         let hostname = syslog_parse_opt_string(buf, &mut first, &len);
         let appname = syslog_parse_opt_string(buf, &mut first, &len);
         let procid = syslog_parse_opt_string(buf, &mut first, &len);
+        let msgid = syslog_parse_opt_string(buf, &mut first, &len);
 
         // structured data may be missing ("-") or will be enclosed in "[", "]"
         let sd: Option<HashMap<String, String>> = if buf[first] == b'-' {
             first += 2;
             None
         } else {
+            let kv_str = buf[first..len].slice_between_brackets();
+            let kv_len = kv_str.len();
+            if kv_len != 0 {
+                first += kv_len;
+                println!("got sd");
+            } else {
+                println!("no sd");
+            }
             None
         };
 
@@ -169,6 +179,7 @@ impl SyslogMsg {
             hostname: hostname,
             appname: appname,
             procid: procid,
+            msgid: msgid,
             sdata: sd,
             msg: msg,
         })
@@ -214,6 +225,7 @@ impl SyslogMsg {
             hostname: hostname,
             appname: None,
             procid: None,
+            msgid: None,
             sdata: None,
             msg: msg,
         })
@@ -317,6 +329,7 @@ impl SyslogMsg {
             hostname: Some(sdata.remove("Host").unwrap().to_string()),
             appname: Some(sdata.remove("Sender").unwrap().to_string()),
             procid: Some(sdata.remove("PID").unwrap().to_string()),
+            msgid: None,
             msg: Some(sdata.remove("Message").unwrap().to_string()),
             sdata: Some(sdata),
         });
