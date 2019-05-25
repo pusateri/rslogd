@@ -1,8 +1,11 @@
 [package]
 name = "rslogd"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Tom Pusateri <pusateri@bangj.com>"]
 edition = "2018"
 
 [dependencies]
+bytes = "0.4.12"
+socket2 = { version = "0.3.9", features = ["reuseport"] }
 mio = "^0.6"
+chrono = "0.4.6"

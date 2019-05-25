@@ -1,4 +1,4 @@
-//! Stage 1 - syslog server rslogd
+//! Stage 2 - syslog server rslogd
 //!
 //! MUST run as root or use sudo
 //!
@@ -13,44 +13,86 @@
 
 use mio::net::UdpSocket;
 use mio::{Events, Poll, PollOpt, Ready, Token};
+use socket2::{Domain, Protocol, Socket, Type};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
-const SERVER: Token = Token(0);
+mod syslog;
+
+const SYSLOG_UDP_PORT: u16 = 514;
+const SERVER4: Token = Token(0);
+const SERVER6: Token = Token(1);
 
 fn main() {
     let mut events = Events::with_capacity(1024);
     let poll = Poll::new().expect("Poll::new() failed");
-    let mut buffer = [0u8; 4096];
+    let mut buffer = [0; 4096];
 
-    // create listen socket
-    let udp_server_socket = match UdpSocket::bind(&"127.0.0.1:514".parse().expect("parse failed")) {
-        Ok(new_socket) => new_socket,
-        Err(fail) => {
-            panic!("Failed to bind socket. {:?}", fail);
-        }
-    };
-    // tell mio about the socket
+    // listen to anyone
+    let udp4_server_s =
+        Socket::new(Domain::ipv4(), Type::dgram(), Some(Protocol::udp())).expect("Socket::new");
+    let sa4 = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), SYSLOG_UDP_PORT);
+
+    #[cfg(unix)]
+    udp4_server_s
+        .set_reuse_port(true)
+        .expect("v4 set_reuse_port");
+    udp4_server_s.bind(&sa4.into()).expect("v4 bind");
+    let udp4_server_mio =
+        UdpSocket::from_socket(udp4_server_s.into_udp_socket()).expect("mio v4 from_socket");
+
+    // listen over IPv6 too
+    let udp6_server_s =
+        Socket::new(Domain::ipv6(), Type::dgram(), Some(Protocol::udp())).expect("Socket::new");
+    let sa6 = SocketAddr::new(
+        Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0).into(),
+        SYSLOG_UDP_PORT,
+    );
+
+    #[cfg(unix)]
+    udp6_server_s.set_reuse_port(true).expect("set_reuse_port");
+    udp6_server_s.set_only_v6(true).expect("set_only_v6");
+    udp6_server_s.bind(&sa6.into()).expect("v6 bind");
+    let udp6_server_mio =
+        UdpSocket::from_socket(udp6_server_s.into_udp_socket()).expect("mio v6 from_socket");
+
+    // edge triggering
     poll.register(
-        &udp_server_socket,
-        SERVER,
+        &udp4_server_mio,
+        SERVER4,
         Ready::readable(),
-        PollOpt::level(),
+        PollOpt::edge(),
+    )
+    .expect("poll.register failed");
+    poll.register(
+        &udp6_server_mio,
+        SERVER6,
+        Ready::readable(),
+        PollOpt::edge(),
     )
     .expect("poll.register failed");
 
-    // main event loop
     loop {
-        // wait for an event to occur
         poll.poll(&mut events, None).expect("poll.poll failed");
         for event in events.iter() {
-            // find token of matching event
             match event.token() {
-                SERVER => {
-                    // read from the socket
-                    let len = udp_server_socket.recv(&mut buffer).expect("recv errors");
-                    println!("recv {} bytes", len);
-                }
+                SERVER4 => receive(&udp4_server_mio, &mut buffer),
+                SERVER6 => receive(&udp6_server_mio, &mut buffer),
                 _ => (),
             }
         }
+    }
+}
+
+// common receive routine
+fn receive(sock: &UdpSocket, buf: &mut [u8]) {
+    let (len, from) = sock.recv_from(buf).expect("recvfrom errors");
+
+    if let Some(msg) = syslog::parse(from, len, buf) {
+        println!("{:?}", msg);
+    } else {
+        println!(
+            "error parsing: {:?}",
+            String::from_utf8(buf[0..len].to_vec())
+        );
     }
 }
