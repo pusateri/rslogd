@@ -23,3 +23,13 @@ To see Stage 2, use:
 ```
 git checkout stage2
 ```
+
+Stage 3
+=======
+Stage 3 adds TCP over IPv4 and IPv6 (RFC 6587). Syslog over TCP shouldn't be used anymore (deprecated in favor of TLS). But adding it as a stage gives us understanding about using mio with TCP.
+
+To see Stage 3, use:
+
+```
+git checkout stage3
+```
