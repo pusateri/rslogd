@@ -32,5 +32,5 @@ Stage 3 adds TCP over IPv4 and IPv6 (RFC 6587). Syslog over TCP shouldn't be use
 To see Stage 3, use:
 
 ```
-git checkout stage3
+git checkout master
 ```
