@@ -11,3 +11,15 @@ Stage 1 is the initial UDP only version over IPv4 (RFC 5426). It prints a line f
 git checkout stage1
 ```
 
+Stage 2
+=======
+Stage 2 adds UDP over IPv6 and adds syslog packet decoding. It supports 3 types of syslog packets:
+    1. Original BSD syslog (RFC 3164)
+    2. syslog Version 1 (RFC 5424)
+    3. Apple System Logger (asl)
+
+To see Stage 2, use:
+
+```
+git checkout stage2
+```
