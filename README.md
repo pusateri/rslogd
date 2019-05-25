@@ -24,4 +24,3 @@ To see Stage 2, use:
 ```
 git checkout stage2
 ```
-
