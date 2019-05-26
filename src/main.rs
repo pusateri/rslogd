@@ -1,9 +1,10 @@
-//! Stage 2 - syslog server rslogd
+//! Stage 3 - syslog server rslogd
 //!
 //! MUST run as root or use sudo
 //!
 //! ```
-//! sudo cargo run
+//! cargo build
+//! sudo target/debug/rslogd
 //! ```
 //!
 //! # panics
@@ -11,16 +12,20 @@
 //! If socket cannot bind to syslog UDP port 514 (permissions or already in use)
 //!
 
-use mio::net::UdpSocket;
+use mio::net::{TcpListener, TcpStream, UdpSocket};
 use mio::{Events, Poll, PollOpt, Ready, Token};
 use socket2::{Domain, Protocol, Socket, Type};
+use std::collections::HashMap;
+use std::io::Read;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
 mod syslog;
 
 const SYSLOG_UDP_PORT: u16 = 514;
-const SERVER4: Token = Token(0);
-const SERVER6: Token = Token(1);
+const SYSLOG_TCP_PORT: u16 = 601;
+const UDP4: Token = Token(0);
+const UDP6: Token = Token(1);
+const TCP4: Token = Token(2);
 
 fn main() {
     let mut events = Events::with_capacity(1024);
@@ -30,15 +35,18 @@ fn main() {
     // listen to anyone
     let udp4_server_s =
         Socket::new(Domain::ipv4(), Type::dgram(), Some(Protocol::udp())).expect("Socket::new");
-    let sa4 = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), SYSLOG_UDP_PORT);
+    let sa_udp4 = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), SYSLOG_UDP_PORT);
 
     #[cfg(unix)]
     udp4_server_s
         .set_reuse_port(true)
         .expect("v4 set_reuse_port");
-    udp4_server_s.bind(&sa4.into()).expect("v4 bind");
+    udp4_server_s.bind(&sa_udp4.into()).expect("v4 bind");
     let udp4_server_mio =
         UdpSocket::from_socket(udp4_server_s.into_udp_socket()).expect("mio v4 from_socket");
+
+    poll.register(&udp4_server_mio, UDP4, Ready::readable(), PollOpt::edge())
+        .expect("poll.register udp4 failed");
 
     // listen over IPv6 too
     let udp6_server_s =
@@ -55,36 +63,48 @@ fn main() {
     let udp6_server_mio =
         UdpSocket::from_socket(udp6_server_s.into_udp_socket()).expect("mio v6 from_socket");
 
-    // edge triggering
-    poll.register(
-        &udp4_server_mio,
-        SERVER4,
-        Ready::readable(),
-        PollOpt::edge(),
-    )
-    .expect("poll.register failed");
-    poll.register(
-        &udp6_server_mio,
-        SERVER6,
-        Ready::readable(),
-        PollOpt::edge(),
-    )
-    .expect("poll.register failed");
+    poll.register(&udp6_server_mio, UDP6, Ready::readable(), PollOpt::edge())
+        .expect("poll.register udp6 failed");
 
+    // TCP server
+    let sa_tcp4 = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), SYSLOG_TCP_PORT);
+    let listener = TcpListener::bind(&sa_tcp4).expect("TcpListener4");
+    poll.register(&listener, TCP4, Ready::readable(), PollOpt::edge())
+        .expect("poll.register tcp4 failed");
+
+    let mut tok_dyn = 100;
+    let mut tcp_tokens: HashMap<Token, TcpStream> = HashMap::new();
     loop {
         poll.poll(&mut events, None).expect("poll.poll failed");
         for event in events.iter() {
             match event.token() {
-                SERVER4 => receive(&udp4_server_mio, &mut buffer),
-                SERVER6 => receive(&udp6_server_mio, &mut buffer),
-                _ => (),
+                UDP4 => receive_udp(&udp4_server_mio, &mut buffer),
+                UDP6 => receive_udp(&udp6_server_mio, &mut buffer),
+                TCP4 => match listener.accept() {
+                    Ok((stream, _sa)) => {
+                        let key = Token(tok_dyn);
+                        let stream_clone = stream.try_clone().expect("stream clone");
+                        poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())
+                            .expect("poll.register dynamic failed");
+                        tcp_tokens.insert(key, stream_clone);
+                        tok_dyn += 1;
+                    }
+                    Err(_e) => eprintln!("connection error"),
+                },
+                tok => {
+                    let mut stream_ref = tcp_tokens.get_mut(&tok).expect("missing stream");
+                    if receive_tcp(&mut stream_ref, &mut buffer) {
+                        poll.deregister(stream_ref).expect("deregister tcp"); // not necessary
+                        tcp_tokens.remove(&tok);
+                    }
+                }
             }
         }
     }
 }
 
 // common receive routine
-fn receive(sock: &UdpSocket, buf: &mut [u8]) {
+fn receive_udp(sock: &UdpSocket, buf: &mut [u8]) {
     let (len, from) = sock.recv_from(buf).expect("recvfrom errors");
 
     if let Some(msg) = syslog::parse(from, len, buf) {
@@ -94,5 +114,27 @@ fn receive(sock: &UdpSocket, buf: &mut [u8]) {
             "error parsing: {:?}",
             String::from_utf8(buf[0..len].to_vec())
         );
+    }
+}
+
+fn receive_tcp(stream: &mut TcpStream, buf: &mut [u8]) -> bool {
+    match stream.read(buf) {
+        Ok(0) => true,
+        Ok(len) => {
+            let from = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), 0);
+            if let Some(msg) = syslog::parse(from, len, buf) {
+                println!("{:?}", msg);
+            } else {
+                println!(
+                    "error parsing: {:?}",
+                    String::from_utf8(buf[0..len].to_vec())
+                );
+            }
+            false
+        }
+        Err(e) => {
+            eprintln!("read error: {}", e);
+            true
+        }
     }
 }
