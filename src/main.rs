@@ -28,6 +28,11 @@ const UDP6: Token = Token(1);
 const TCP4: Token = Token(2);
 const TCP6: Token = Token(3);
 
+struct TcpConn {
+    stream: TcpStream,
+    sa: SocketAddr,
+}
+
 fn main() {
     let mut events = Events::with_capacity(1024);
     let poll = Poll::new().expect("Poll::new() failed");
@@ -83,7 +88,7 @@ fn main() {
         .expect("poll.register tcp6 failed");
 
     let mut tok_dyn = 10;
-    let mut tcp_tokens: HashMap<Token, TcpStream> = HashMap::new();
+    let mut tcp_tokens: HashMap<Token, TcpConn> = HashMap::new();
     loop {
         poll.poll(&mut events, None).expect("poll.poll failed");
         for event in events.iter() {
@@ -91,31 +96,39 @@ fn main() {
                 UDP4 => receive_udp(&udp4_server_mio, &mut buffer),
                 UDP6 => receive_udp(&udp6_server_mio, &mut buffer),
                 TCP4 => match listener4.accept() {
-                    Ok((stream, _sa)) => {
+                    Ok((stream, sa)) => {
                         let key = Token(tok_dyn);
                         let stream_clone = stream.try_clone().expect("tcp4 stream clone");
                         poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())
                             .expect("poll.register tcp4 dynamic failed");
-                        tcp_tokens.insert(key, stream_clone);
+                        let conn = TcpConn {
+                            stream: stream_clone,
+                            sa: sa,
+                        };
+                        tcp_tokens.insert(key, conn);
                         tok_dyn += 1;
                     }
                     Err(_e) => eprintln!("tcp4 connection error"),
                 },
                 TCP6 => match listener6.accept() {
-                    Ok((stream, _sa)) => {
+                    Ok((stream, sa)) => {
                         let key = Token(tok_dyn);
                         let stream_clone = stream.try_clone().expect("tcp6 stream clone");
                         poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())
                             .expect("poll.register tcp6 dynamic failed");
-                        tcp_tokens.insert(key, stream_clone);
+                        let conn = TcpConn {
+                            stream: stream_clone,
+                            sa: sa,
+                        };
+                        tcp_tokens.insert(key, conn);
                         tok_dyn += 1;
                     }
                     Err(_e) => eprintln!("tcp6 connection error"),
                 },
                 tok => {
-                    let mut stream_ref = tcp_tokens.get_mut(&tok).expect("missing stream");
-                    if receive_tcp(&mut stream_ref, &mut buffer) {
-                        poll.deregister(stream_ref).expect("deregister tcp"); // not necessary
+                    let conn_ref = tcp_tokens.get_mut(&tok).expect("missing stream");
+                    if receive_tcp(conn_ref, &mut buffer) {
+                        poll.deregister(&conn_ref.stream).expect("deregister tcp"); // not necessary
                         tcp_tokens.remove(&tok);
                     }
                 }
@@ -138,12 +151,11 @@ fn receive_udp(sock: &UdpSocket, buf: &mut [u8]) {
     }
 }
 
-fn receive_tcp(stream: &mut TcpStream, buf: &mut [u8]) -> bool {
-    match stream.read(buf) {
+fn receive_tcp(conn_ref: &mut TcpConn, buf: &mut [u8]) -> bool {
+    match conn_ref.stream.read(buf) {
         Ok(0) => true,
         Ok(len) => {
-            let from = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), 0);
-            if let Some(msg) = syslog::parse(from, len, buf) {
+            if let Some(msg) = syslog::parse(conn_ref.sa, len, buf) {
                 println!("{:?}", msg);
             } else {
                 println!(
