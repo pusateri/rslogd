@@ -26,6 +26,7 @@ const SYSLOG_TCP_PORT: u16 = 601;
 const UDP4: Token = Token(0);
 const UDP6: Token = Token(1);
 const TCP4: Token = Token(2);
+const TCP6: Token = Token(3);
 
 fn main() {
     let mut events = Events::with_capacity(1024);
@@ -50,15 +51,15 @@ fn main() {
 
     // listen over IPv6 too
     let udp6_server_s =
-        Socket::new(Domain::ipv6(), Type::dgram(), Some(Protocol::udp())).expect("Socket::new");
+        Socket::new(Domain::ipv6(), Type::dgram(), Some(Protocol::udp())).expect("udp6 Socket::new");
     let sa6 = SocketAddr::new(
         Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0).into(),
         SYSLOG_UDP_PORT,
     );
 
     #[cfg(unix)]
-    udp6_server_s.set_reuse_port(true).expect("set_reuse_port");
-    udp6_server_s.set_only_v6(true).expect("set_only_v6");
+    udp6_server_s.set_reuse_port(true).expect("udp set_reuse_port");
+    udp6_server_s.set_only_v6(true).expect("udp set_only_v6");
     udp6_server_s.bind(&sa6.into()).expect("v6 bind");
     let udp6_server_mio =
         UdpSocket::from_socket(udp6_server_s.into_udp_socket()).expect("mio v6 from_socket");
@@ -66,13 +67,22 @@ fn main() {
     poll.register(&udp6_server_mio, UDP6, Ready::readable(), PollOpt::edge())
         .expect("poll.register udp6 failed");
 
-    // TCP server
+    // TCP IPv4 server
     let sa_tcp4 = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), SYSLOG_TCP_PORT);
-    let listener = TcpListener::bind(&sa_tcp4).expect("TcpListener4");
-    poll.register(&listener, TCP4, Ready::readable(), PollOpt::edge())
+    let listener4 = TcpListener::bind(&sa_tcp4).expect("TcpListener4");
+    poll.register(&listener4, TCP4, Ready::readable(), PollOpt::edge())
         .expect("poll.register tcp4 failed");
 
-    let mut tok_dyn = 100;
+    // TCP IPv6 server
+    let sa_tcp6 = SocketAddr::new(
+        Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0).into(),
+        SYSLOG_TCP_PORT,
+    );
+    let listener6 = TcpListener::bind(&sa_tcp6).expect("TcpListener6");
+    poll.register(&listener6, TCP6, Ready::readable(), PollOpt::edge())
+        .expect("poll.register tcp6 failed");
+
+    let mut tok_dyn = 10;
     let mut tcp_tokens: HashMap<Token, TcpStream> = HashMap::new();
     loop {
         poll.poll(&mut events, None).expect("poll.poll failed");
@@ -80,16 +90,27 @@ fn main() {
             match event.token() {
                 UDP4 => receive_udp(&udp4_server_mio, &mut buffer),
                 UDP6 => receive_udp(&udp6_server_mio, &mut buffer),
-                TCP4 => match listener.accept() {
+                TCP4 => match listener4.accept() {
                     Ok((stream, _sa)) => {
                         let key = Token(tok_dyn);
-                        let stream_clone = stream.try_clone().expect("stream clone");
+                        let stream_clone = stream.try_clone().expect("tcp4 stream clone");
                         poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())
-                            .expect("poll.register dynamic failed");
+                            .expect("poll.register tcp4 dynamic failed");
                         tcp_tokens.insert(key, stream_clone);
                         tok_dyn += 1;
                     }
-                    Err(_e) => eprintln!("connection error"),
+                    Err(_e) => eprintln!("tcp4 connection error"),
+                },
+                TCP6 => match listener6.accept() {
+                    Ok((stream, _sa)) => {
+                        let key = Token(tok_dyn);
+                        let stream_clone = stream.try_clone().expect("tcp6 stream clone");
+                        poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())
+                            .expect("poll.register tcp6 dynamic failed");
+                        tcp_tokens.insert(key, stream_clone);
+                        tok_dyn += 1;
+                    }
+                    Err(_e) => eprintln!("tcp6 connection error"),
                 },
                 tok => {
                     let mut stream_ref = tcp_tokens.get_mut(&tok).expect("missing stream");
