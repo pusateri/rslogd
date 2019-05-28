@@ -1,4 +1,4 @@
-//! Stage 3 - syslog server rslogd
+//! Stage 4 - syslog server rslogd
 //!
 //! MUST run as root or use sudo
 //!

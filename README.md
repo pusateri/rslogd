@@ -37,5 +37,15 @@ Stage 3 adds TCP over IPv4 and IPv6 ([RFC 6587](https://tools.ietf.org/html/rfc6
 To see Stage 3, use:
 
 ```
+git checkout stage3
+```
+
+Stage 4
+=======
+Stage 4 adds TLS support to syslog as described in [RFC 5425](https://tools.ietf.org/html/rfc5425)
+
+To see Stage 4, use:
+
+```
 git checkout master
 ```
