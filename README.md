@@ -37,5 +37,5 @@ Stage 3 adds TCP over IPv4 and IPv6 ([RFC 6587](https://tools.ietf.org/html/rfc6
 To see Stage 3, use:
 
 ```
-git checkout master
+git checkout stage3
 ```
