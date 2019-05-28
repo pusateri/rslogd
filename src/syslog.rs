@@ -158,9 +158,7 @@ impl SyslogMsg {
             let kv_len = kv_str.len();
             if kv_len != 0 {
                 first += kv_len;
-                println!("got sd");
-            } else {
-                println!("no sd");
+                eprintln!("todo: parse sd");
             }
             None
         };
@@ -299,25 +297,41 @@ impl SyslogMsg {
                 Ok(num) => num,
                 Err(_e) => return None,
             },
-            None => return None,
+            None => 7,
         };
         let facility = match sdata.remove("Facility") {
             Some(val) => syslog_parse_asl_facility_name(&val),
-            None => return None,
+            None => LOG_USER,
         };
         let time_sec: i64 = match sdata.remove("Time") {
             Some(val) => match val.parse() {
                 Ok(num) => num,
                 Err(_e) => return None,
             },
-            None => return None,
+            None => 0,
         };
         let time_nanosec: u32 = match sdata.remove("TimeNanoSec") {
             Some(val) => match val.parse() {
                 Ok(num) => num,
                 Err(_e) => return None,
             },
-            None => return None,
+            None => 0,
+        };
+        let hostname: Option<String> = match sdata.remove("Host") {
+            Some(val) => Some(val.to_string()),
+            None => None,
+        };
+        let appname: Option<String> = match sdata.remove("Sender") {
+            Some(val) => Some(val.to_string()),
+            None => None,
+        };
+        let procid: Option<String> = match sdata.remove("PID") {
+            Some(val) => Some(val.to_string()),
+            None => None,
+        };
+        let msg: Option<String> = match sdata.remove("Message") {
+            Some(val) => Some(val.to_string()),
+            None => None,
         };
         let timestamp = Utc.timestamp(time_sec, time_nanosec);
         return Some(SyslogMsg {
@@ -326,11 +340,11 @@ impl SyslogMsg {
             severity: severity,
             version: 0,
             timestamp: Some(timestamp),
-            hostname: Some(sdata.remove("Host").unwrap().to_string()),
-            appname: Some(sdata.remove("Sender").unwrap().to_string()),
-            procid: Some(sdata.remove("PID").unwrap().to_string()),
+            hostname: hostname,
+            appname: appname,
+            procid: procid,
             msgid: None,
-            msg: Some(sdata.remove("Message").unwrap().to_string()),
+            msg: msg,
             sdata: Some(sdata),
         });
     }
