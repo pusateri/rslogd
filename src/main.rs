@@ -80,8 +80,7 @@ fn load_private_key(filename: &str) -> rustls::PrivateKey {
     }
 }
 
-const USAGE: &'static str =
-    "
+const USAGE: &'static str = "
 Syslog server that supports UDP, TCP (deprecated), and TLS over IPv4 and IPv6.
 
 `--certs' names the full certificate chain,
