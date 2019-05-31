@@ -42,10 +42,10 @@ git checkout stage3
 
 Stage 4
 =======
-Stage 4 adds TLS support to syslog as described in [RFC 5425](https://tools.ietf.org/html/rfc5425)
+Stage 4 adds TLS over IPv4 support to syslog as described in [RFC 5425](https://tools.ietf.org/html/rfc5425). Adds command line options to provide certificates and private key.
 
 To see Stage 4, use:
 
 ```
-git checkout master
+git checkout stage4
 ```
