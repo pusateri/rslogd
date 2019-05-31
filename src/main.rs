@@ -18,6 +18,8 @@ use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::HashMap;
 use std::io::Read;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use index_pool::IndexPool;
+
 // TLS
 use rustls;
 use rustls::Session;
@@ -27,7 +29,6 @@ use std::sync::Arc;
 
 #[macro_use]
 extern crate serde_derive;
-
 use docopt::Docopt;
 
 mod syslog;
@@ -41,11 +42,13 @@ const UDP6: Token = Token(1);
 const TCP4: Token = Token(2);
 const TCP6: Token = Token(3);
 const TLS4: Token = Token(4);
+//const TLS6: Token = Token(5);
 
 struct ClientConnection {
     stream: TcpStream,
     session: Option<rustls::ServerSession>,
     sa: SocketAddr,
+    token_index: usize,
 }
 
 // from https://github.com/ctz/rustls/blob/master/rustls-mio/examples/tlsserver.rs
@@ -187,8 +190,8 @@ fn main() {
     poll.register(&tls_listener4, TLS4, Ready::readable(), PollOpt::edge())
         .expect("poll.register tls4 failed");
 
-    let mut tok_dyn = 10;
     let mut tokens: HashMap<Token, ClientConnection> = HashMap::new();
+    let mut pool = IndexPool::with_initial_index(6);
     loop {
         poll.poll(&mut events, None).expect("poll.poll failed");
         for event in events.iter() {
@@ -197,7 +200,8 @@ fn main() {
                 UDP6 => receive_udp(&udp6_server_mio, &mut buffer),
                 TCP4 => match listener4.accept() {
                     Ok((stream, sa)) => {
-                        let key = Token(tok_dyn);
+                        let idx = pool.new_id();
+                        let key = Token(idx);
                         let stream_clone = stream.try_clone().expect("tcp4 stream clone");
                         poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())
                             .expect("poll.register tcp4 dynamic failed");
@@ -205,15 +209,16 @@ fn main() {
                             stream: stream_clone,
                             session: None,
                             sa: sa,
+                            token_index: idx,
                         };
                         tokens.insert(key, conn);
-                        tok_dyn += 1;
                     }
                     Err(_e) => eprintln!("tcp4 connection error"),
                 },
                 TCP6 => match listener6.accept() {
                     Ok((stream, sa)) => {
-                        let key = Token(tok_dyn);
+                        let idx = pool.new_id();
+                        let key = Token(idx);
                         let stream_clone = stream.try_clone().expect("tcp6 stream clone");
                         poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())
                             .expect("poll.register tcp6 dynamic failed");
@@ -221,16 +226,18 @@ fn main() {
                             stream: stream_clone,
                             session: None,
                             sa: sa,
+                            token_index: idx,
                         };
                         tokens.insert(key, conn);
-                        tok_dyn += 1;
                     }
                     Err(_e) => eprintln!("tcp6 connection error"),
                 },
                 TLS4 => match tls_listener4.accept() {
                     Ok((stream, sa)) => {
                         let tls_session = rustls::ServerSession::new(&tls_config);
-                        let key = Token(tok_dyn);
+                        let idx = pool.new_id();
+                        println!("index: {}", idx);
+                        let key = Token(idx);
                         let stream_clone = stream.try_clone().expect("tls4 stream clone");
                         poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())
                             .expect("poll.register tls4 dynamic failed");
@@ -238,9 +245,9 @@ fn main() {
                             stream: stream_clone,
                             session: Some(tls_session),
                             sa: sa,
+                            token_index: idx,
                         };
                         tokens.insert(key, conn);
-                        tok_dyn += 1;
                     }
                     Err(_e) => eprintln!("tls4 connection error"),
                 },
@@ -277,12 +284,14 @@ fn main() {
                                 // finished TLS handshake
                                 if receive_tls(conn_ref, &mut buffer) {
                                     poll.deregister(&conn_ref.stream).expect("deregister tls"); // not necessary
+                                    pool.return_id(conn_ref.token_index).expect("tls pool return id");
                                     tokens.remove(&tok);
                                 }
                             } else {
                                 // it's TCP (no session)
                                 if receive_tcp(conn_ref, &mut buffer) {
                                     poll.deregister(&conn_ref.stream).expect("deregister tcp"); // not necessary
+                                    pool.return_id(conn_ref.token_index).expect("tcp pool return id");
                                     tokens.remove(&tok);
                                 }
                             }
