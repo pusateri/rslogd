@@ -49,3 +49,13 @@ To see Stage 4, use:
 ```
 git checkout stage4
 ```
+
+Stage 5
+=======
+Stage 5 will add TLS over IPv6 support and an index pool for tokens. Work in Progress.
+
+To see Stage 5, use:
+
+```
+git checkout master
+```
