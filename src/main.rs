@@ -25,6 +25,11 @@ use std::fs;
 use std::io::BufReader;
 use std::sync::Arc;
 
+#[macro_use]
+extern crate serde_derive;
+
+use docopt::Docopt;
+
 mod syslog;
 
 const SYSLOG_UDP_PORT: u16 = 514;
@@ -75,7 +80,46 @@ fn load_private_key(filename: &str) -> rustls::PrivateKey {
     }
 }
 
+const USAGE: &'static str =
+    "
+Syslog server that supports UDP, TCP (deprecated), and TLS over IPv4 and IPv6.
+
+`--certs' names the full certificate chain,
+`--key' provides the RSA private key.
+
+Usage:
+  rslogd [--verbose] --certs CERTFILE --key KEYFILE 
+  rslogd (--version | -v)
+  rslogd (--help | -h)
+
+Options:
+    --certs CERTFILE    Read server certificates from CERTFILE.
+                        This should contain PEM-format certificates
+                        in the right order (the first certificate should
+                        certify KEYFILE, the last should be a root CA).
+    --key KEYFILE       Read private key from KEYFILE. This should be a RSA
+                        private key or PKCS8-encoded private key in PEM format.
+    --verbose           Monitor progress.
+    --version, -v       Show version.
+    --help, -h          Show this screen.
+";
+
+#[derive(Debug, Deserialize)]
+struct Args {
+    flag_verbose: bool,
+    flag_certs: Option<String>,
+    flag_key: Option<String>,
+}
+
 fn main() {
+    let version = env!("CARGO_PKG_NAME").to_string() + ", version: " + env!("CARGO_PKG_VERSION");
+
+    let args: Args = Docopt::new(USAGE)
+        .and_then(|d| Ok(d.help(true)))
+        .and_then(|d| Ok(d.version(Some(version))))
+        .and_then(|d| d.deserialize())
+        .unwrap_or_else(|e| e.exit());
+
     let mut events = Events::with_capacity(1024);
     let poll = Poll::new().expect("Poll::new() failed");
     let mut buffer = [0; 4096];
@@ -131,8 +175,8 @@ fn main() {
 
     // general TLS setup
     let mut tls_conf = rustls::ServerConfig::new(rustls::NoClientAuth::new());
-    let certs = load_certs("./nstest.org/cert.pem");
-    let privkey = load_private_key("./nstest.org/privkey.pem");
+    let certs = load_certs(args.flag_certs.as_ref().expect("--certs option missing"));
+    let privkey = load_private_key(args.flag_key.as_ref().expect("--key option missing"));
     tls_conf
         .set_single_cert(certs, privkey)
         .expect("bad certificates/private key");
@@ -186,9 +230,7 @@ fn main() {
                 },
                 TLS4 => match tls_listener4.accept() {
                     Ok((stream, sa)) => {
-                        println!("accepted TLS");
                         let tls_session = rustls::ServerSession::new(&tls_config);
-                        println!("created new tls session");
                         let key = Token(tok_dyn);
                         let stream_clone = stream.try_clone().expect("tls4 stream clone");
                         poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())
@@ -206,6 +248,7 @@ fn main() {
                 tok => {
                     match tokens.get_mut(&tok) {
                         Some(conn_ref) => {
+                            // if we have a TLS session, use TLS methods
                             if let Some(ref mut session) = conn_ref.session {
                                 if session.is_handshaking() {
                                     if session.wants_read() {
@@ -238,6 +281,7 @@ fn main() {
                                     tokens.remove(&tok);
                                 }
                             } else {
+                                // it's TCP (no session)
                                 if receive_tcp(conn_ref, &mut buffer) {
                                     poll.deregister(&conn_ref.stream).expect("deregister tcp"); // not necessary
                                     tokens.remove(&tok);
