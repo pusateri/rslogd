@@ -18,19 +18,66 @@ use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::HashMap;
 use std::io::Read;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+// TLS
+use std::fs;
+use std::io::BufReader;
+use std::sync::Arc;
+use rustls;
+use rustls::Session;
 
 mod syslog;
 
 const SYSLOG_UDP_PORT: u16 = 514;
 const SYSLOG_TCP_PORT: u16 = 601;
+const SYSLOG_TLS_PORT: u16 = 6514;
+
 const UDP4: Token = Token(0);
 const UDP6: Token = Token(1);
 const TCP4: Token = Token(2);
 const TCP6: Token = Token(3);
+const TLS4: Token = Token(4);
 
 struct TcpConn {
     stream: TcpStream,
     sa: SocketAddr,
+}
+
+struct TlsConn {
+    stream: TcpStream,
+    session: rustls::ServerSession,
+    sa: SocketAddr,
+}
+
+fn load_certs(filename: &str) -> Vec<rustls::Certificate> {
+    let certfile = fs::File::open(filename).expect("cannot open certificate file");
+    let mut reader = BufReader::new(certfile);
+    rustls::internal::pemfile::certs(&mut reader).unwrap()
+}
+
+fn load_private_key(filename: &str) -> rustls::PrivateKey {
+    let rsa_keys = {
+        let keyfile = fs::File::open(filename)
+            .expect("cannot open private key file");
+        let mut reader = BufReader::new(keyfile);
+        rustls::internal::pemfile::rsa_private_keys(&mut reader)
+            .expect("file contains invalid rsa private key")
+    };
+
+    let pkcs8_keys = {
+        let keyfile = fs::File::open(filename)
+            .expect("cannot open private key file");
+        let mut reader = BufReader::new(keyfile);
+        rustls::internal::pemfile::pkcs8_private_keys(&mut reader)
+            .expect("file contains invalid pkcs8 private key (encrypted keys not supported)")
+    };
+
+    // prefer to load pkcs8 keys
+    if !pkcs8_keys.is_empty() {
+        pkcs8_keys[0].clone()
+    } else {
+        assert!(!rsa_keys.is_empty());
+        rsa_keys[0].clone()
+    }
 }
 
 fn main() {
@@ -38,7 +85,7 @@ fn main() {
     let poll = Poll::new().expect("Poll::new() failed");
     let mut buffer = [0; 4096];
 
-    // listen to anyone
+    // UDP
     let udp4_server_s =
         Socket::new(Domain::ipv4(), Type::dgram(), Some(Protocol::udp())).expect("Socket::new");
     let sa_udp4 = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), SYSLOG_UDP_PORT);
@@ -54,7 +101,6 @@ fn main() {
     poll.register(&udp4_server_mio, UDP4, Ready::readable(), PollOpt::edge())
         .expect("poll.register udp4 failed");
 
-    // listen over IPv6 too
     let udp6_server_s =
         Socket::new(Domain::ipv6(), Type::dgram(), Some(Protocol::udp())).expect("udp6 Socket::new");
     let sa6 = SocketAddr::new(
@@ -72,13 +118,12 @@ fn main() {
     poll.register(&udp6_server_mio, UDP6, Ready::readable(), PollOpt::edge())
         .expect("poll.register udp6 failed");
 
-    // TCP IPv4 server
+    // TCP
     let sa_tcp4 = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), SYSLOG_TCP_PORT);
     let listener4 = TcpListener::bind(&sa_tcp4).expect("TcpListener4");
     poll.register(&listener4, TCP4, Ready::readable(), PollOpt::edge())
         .expect("poll.register tcp4 failed");
 
-    // TCP IPv6 server
     let sa_tcp6 = SocketAddr::new(
         Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0).into(),
         SYSLOG_TCP_PORT,
@@ -87,8 +132,22 @@ fn main() {
     poll.register(&listener6, TCP6, Ready::readable(), PollOpt::edge())
         .expect("poll.register tcp6 failed");
 
+    // general TLS setup
+    let mut tls_conf = rustls::ServerConfig::new(rustls::NoClientAuth::new());
+    let certs = load_certs("./nstest.org/cert.pem");
+    let privkey = load_private_key("./nstest.org/privkey.pem");
+    tls_conf.set_single_cert(certs, privkey).expect("bad certificates/private key");
+    let tls_config = Arc::new(tls_conf);
+
+    // TLS IPv4
+    let sa_tls4 = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), SYSLOG_TLS_PORT);
+    let tls_listener4 = TcpListener::bind(&sa_tls4).expect("TlsListener4");
+    poll.register(&tls_listener4, TLS4, Ready::readable(), PollOpt::edge())
+        .expect("poll.register tls4 failed");
+
     let mut tok_dyn = 10;
     let mut tcp_tokens: HashMap<Token, TcpConn> = HashMap::new();
+    let mut tls_tokens: HashMap<Token, TlsConn> = HashMap::new();
     loop {
         poll.poll(&mut events, None).expect("poll.poll failed");
         for event in events.iter() {
@@ -107,7 +166,7 @@ fn main() {
                         };
                         tcp_tokens.insert(key, conn);
                         tok_dyn += 1;
-                    }
+                    },
                     Err(_e) => eprintln!("tcp4 connection error"),
                 },
                 TCP6 => match listener6.accept() {
@@ -122,14 +181,70 @@ fn main() {
                         };
                         tcp_tokens.insert(key, conn);
                         tok_dyn += 1;
-                    }
+                    },
                     Err(_e) => eprintln!("tcp6 connection error"),
                 },
+                TLS4 => match tls_listener4.accept() {
+                    Ok((stream, sa)) => {
+                        println!("accepted TLS");
+                        let tls_session = rustls::ServerSession::new(&tls_config);
+                        println!("created new tls session");
+                        let key = Token(tok_dyn);
+                        let stream_clone = stream.try_clone().expect("tls4 stream clone");
+                        poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())
+                            .expect("poll.register tls4 dynamic failed");
+                        let conn = TlsConn {
+                            stream: stream_clone,
+                            session: tls_session,
+                            sa: sa,
+                        };
+                        tls_tokens.insert(key, conn);
+                        tok_dyn += 1;
+                    },
+                    Err(_e) => eprintln!("tls4 connection error"),
+                }
                 tok => {
-                    let conn_ref = tcp_tokens.get_mut(&tok).expect("missing stream");
-                    if receive_tcp(conn_ref, &mut buffer) {
-                        poll.deregister(&conn_ref.stream).expect("deregister tcp"); // not necessary
-                        tcp_tokens.remove(&tok);
+                    match tcp_tokens.get_mut(&tok) {
+                        Some(conn_ref) => {
+                            if receive_tcp(conn_ref, &mut buffer) {
+                                poll.deregister(&conn_ref.stream).expect("deregister tcp"); // not necessary
+                                tcp_tokens.remove(&tok);
+                            }
+                        },
+                        None => {
+                            let conn_ref = tls_tokens.get_mut(&tok).expect("missing stream");
+
+                            if conn_ref.session.is_handshaking() {
+                                if conn_ref.session.wants_read() {
+                                    let rc = conn_ref.session.read_tls(&mut conn_ref.stream);
+                                    if rc.is_err() {
+                                        continue;
+                                    }
+                                    if rc.unwrap() == 0 {
+                                        continue;
+                                    }
+                                    let rc2 = conn_ref.session.process_new_packets();
+                                    if rc2.is_err() {
+                                        continue;
+                                    }
+                                }
+                                while conn_ref.session.wants_write() {
+                                    let rc = conn_ref.session.write_tls(&mut conn_ref.stream);
+                                    if rc.is_err() {
+                                        continue;
+                                    }
+                                    if rc.unwrap() == 0 {
+                                        continue;
+                                    }
+                                }
+                                continue;
+                            }
+                            // finished TLS handshake
+                            if receive_tls(conn_ref, &mut buffer) {
+                                poll.deregister(&conn_ref.stream).expect("deregister tls"); // not necessary
+                                tls_tokens.remove(&tok);
+                            }
+                        }
                     }
                 }
             }
@@ -145,29 +260,65 @@ fn receive_udp(sock: &UdpSocket, buf: &mut [u8]) {
         println!("{:?}", msg);
     } else {
         println!(
-            "error parsing: {:?}",
-            String::from_utf8(buf[0..len].to_vec())
+            "error parsing {} bytes over UDP: {:?}",
+            len, String::from_utf8(buf[0..len].to_vec())
         );
     }
 }
 
 fn receive_tcp(conn_ref: &mut TcpConn, buf: &mut [u8]) -> bool {
     match conn_ref.stream.read(buf) {
-        Ok(0) => true,
+        Ok(0) => {
+            println!("read returned 0");
+            true
+        },
         Ok(len) => {
             if let Some(msg) = syslog::parse(conn_ref.sa, len, buf) {
                 println!("{:?}", msg);
             } else {
                 println!(
-                    "error parsing: {:?}",
-                    String::from_utf8(buf[0..len].to_vec())
+                    "error parsing {} bytes over TCP: {:?}",
+                    len, String::from_utf8(buf[0..len].to_vec())
                 );
             }
             false
-        }
+        },
         Err(e) => {
             eprintln!("read error: {}", e);
             true
         }
     }
+}
+
+fn receive_tls(conn_ref: &mut TlsConn, buf: &mut [u8]) -> bool {
+    let rc = conn_ref.session.read_tls(&mut conn_ref.stream);
+    if rc.is_err() {
+        return true;
+    }
+    if rc.unwrap() == 0 {
+        return true;
+    }
+    let processed = conn_ref.session.process_new_packets();
+    if processed.is_err() {
+        return true;
+    }
+    let rc = conn_ref.session.read(&mut buf[..2048]);
+    match rc {
+        Ok(0) => return true,
+        Ok(len) => {
+            if let Some(msg) = syslog::parse(conn_ref.sa, len, buf) {
+                println!("{:?}", msg);
+            } else {
+                println!(
+                    "error parsing {} bytes over TLS: {:?}",
+                    len, String::from_utf8(buf[0..len].to_vec())
+                );
+            }
+            return false
+        },
+        Err(e) => {
+            eprintln!("read_to_end error: {}", e);
+            return true;
+        },
+    };
 }
