@@ -37,23 +37,20 @@ const TCP4: Token = Token(2);
 const TCP6: Token = Token(3);
 const TLS4: Token = Token(4);
 
-struct TcpConn {
+struct ClientConnection {
     stream: TcpStream,
+    session: Option<rustls::ServerSession>,
     sa: SocketAddr,
 }
 
-struct TlsConn {
-    stream: TcpStream,
-    session: rustls::ServerSession,
-    sa: SocketAddr,
-}
-
+// from https://github.com/ctz/rustls/blob/master/rustls-mio/examples/tlsserver.rs
 fn load_certs(filename: &str) -> Vec<rustls::Certificate> {
     let certfile = fs::File::open(filename).expect("cannot open certificate file");
     let mut reader = BufReader::new(certfile);
     rustls::internal::pemfile::certs(&mut reader).unwrap()
 }
 
+// from https://github.com/ctz/rustls/blob/master/rustls-mio/examples/tlsserver.rs
 fn load_private_key(filename: &str) -> rustls::PrivateKey {
     let rsa_keys = {
         let keyfile = fs::File::open(filename).expect("cannot open private key file");
@@ -148,8 +145,7 @@ fn main() {
         .expect("poll.register tls4 failed");
 
     let mut tok_dyn = 10;
-    let mut tcp_tokens: HashMap<Token, TcpConn> = HashMap::new();
-    let mut tls_tokens: HashMap<Token, TlsConn> = HashMap::new();
+    let mut tokens: HashMap<Token, ClientConnection> = HashMap::new();
     loop {
         poll.poll(&mut events, None).expect("poll.poll failed");
         for event in events.iter() {
@@ -162,11 +158,12 @@ fn main() {
                         let stream_clone = stream.try_clone().expect("tcp4 stream clone");
                         poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())
                             .expect("poll.register tcp4 dynamic failed");
-                        let conn = TcpConn {
+                        let conn = ClientConnection {
                             stream: stream_clone,
+                            session: None,
                             sa: sa,
                         };
-                        tcp_tokens.insert(key, conn);
+                        tokens.insert(key, conn);
                         tok_dyn += 1;
                     }
                     Err(_e) => eprintln!("tcp4 connection error"),
@@ -177,11 +174,12 @@ fn main() {
                         let stream_clone = stream.try_clone().expect("tcp6 stream clone");
                         poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())
                             .expect("poll.register tcp6 dynamic failed");
-                        let conn = TcpConn {
+                        let conn = ClientConnection {
                             stream: stream_clone,
+                            session: None,
                             sa: sa,
                         };
-                        tcp_tokens.insert(key, conn);
+                        tokens.insert(key, conn);
                         tok_dyn += 1;
                     }
                     Err(_e) => eprintln!("tcp6 connection error"),
@@ -195,58 +193,58 @@ fn main() {
                         let stream_clone = stream.try_clone().expect("tls4 stream clone");
                         poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())
                             .expect("poll.register tls4 dynamic failed");
-                        let conn = TlsConn {
+                        let conn = ClientConnection {
                             stream: stream_clone,
-                            session: tls_session,
+                            session: Some(tls_session),
                             sa: sa,
                         };
-                        tls_tokens.insert(key, conn);
+                        tokens.insert(key, conn);
                         tok_dyn += 1;
                     }
                     Err(_e) => eprintln!("tls4 connection error"),
                 },
                 tok => {
-                    match tcp_tokens.get_mut(&tok) {
+                    match tokens.get_mut(&tok) {
                         Some(conn_ref) => {
-                            if receive_tcp(conn_ref, &mut buffer) {
-                                poll.deregister(&conn_ref.stream).expect("deregister tcp"); // not necessary
-                                tcp_tokens.remove(&tok);
+                            if let Some(ref mut session) = conn_ref.session {
+                                if session.is_handshaking() {
+                                    if session.wants_read() {
+                                        let rc = session.read_tls(&mut conn_ref.stream);
+                                        if rc.is_err() {
+                                            continue;
+                                        }
+                                        if rc.unwrap() == 0 {
+                                            continue;
+                                        }
+                                        let rc2 = session.process_new_packets();
+                                        if rc2.is_err() {
+                                            continue;
+                                        }
+                                    }
+                                    while session.wants_write() {
+                                        let rc = session.write_tls(&mut conn_ref.stream);
+                                        if rc.is_err() {
+                                            continue;
+                                        }
+                                        if rc.unwrap() == 0 {
+                                            continue;
+                                        }
+                                    }
+                                    continue;
+                                }
+                                // finished TLS handshake
+                                if receive_tls(conn_ref, &mut buffer) {
+                                    poll.deregister(&conn_ref.stream).expect("deregister tls"); // not necessary
+                                    tokens.remove(&tok);
+                                }
+                            } else {
+                                if receive_tcp(conn_ref, &mut buffer) {
+                                    poll.deregister(&conn_ref.stream).expect("deregister tcp"); // not necessary
+                                    tokens.remove(&tok);
+                                }
                             }
                         }
-                        None => {
-                            let conn_ref = tls_tokens.get_mut(&tok).expect("missing stream");
-
-                            if conn_ref.session.is_handshaking() {
-                                if conn_ref.session.wants_read() {
-                                    let rc = conn_ref.session.read_tls(&mut conn_ref.stream);
-                                    if rc.is_err() {
-                                        continue;
-                                    }
-                                    if rc.unwrap() == 0 {
-                                        continue;
-                                    }
-                                    let rc2 = conn_ref.session.process_new_packets();
-                                    if rc2.is_err() {
-                                        continue;
-                                    }
-                                }
-                                while conn_ref.session.wants_write() {
-                                    let rc = conn_ref.session.write_tls(&mut conn_ref.stream);
-                                    if rc.is_err() {
-                                        continue;
-                                    }
-                                    if rc.unwrap() == 0 {
-                                        continue;
-                                    }
-                                }
-                                continue;
-                            }
-                            // finished TLS handshake
-                            if receive_tls(conn_ref, &mut buffer) {
-                                poll.deregister(&conn_ref.stream).expect("deregister tls"); // not necessary
-                                tls_tokens.remove(&tok);
-                            }
-                        }
+                        None => eprintln!("missing stream for Token {:?}", tok),
                     }
                 }
             }
@@ -269,7 +267,7 @@ fn receive_udp(sock: &UdpSocket, buf: &mut [u8]) {
     }
 }
 
-fn receive_tcp(conn_ref: &mut TcpConn, buf: &mut [u8]) -> bool {
+fn receive_tcp(conn_ref: &mut ClientConnection, buf: &mut [u8]) -> bool {
     match conn_ref.stream.read(buf) {
         Ok(0) => {
             println!("read returned 0");
@@ -294,36 +292,40 @@ fn receive_tcp(conn_ref: &mut TcpConn, buf: &mut [u8]) -> bool {
     }
 }
 
-fn receive_tls(conn_ref: &mut TlsConn, buf: &mut [u8]) -> bool {
-    let rc = conn_ref.session.read_tls(&mut conn_ref.stream);
-    if rc.is_err() {
-        return true;
-    }
-    if rc.unwrap() == 0 {
-        return true;
-    }
-    let processed = conn_ref.session.process_new_packets();
-    if processed.is_err() {
-        return true;
-    }
-    let rc = conn_ref.session.read(&mut buf[..2048]);
-    match rc {
-        Ok(0) => return true,
-        Ok(len) => {
-            if let Some(msg) = syslog::parse(conn_ref.sa, len, buf) {
-                println!("{:?}", msg);
-            } else {
-                println!(
-                    "error parsing {} bytes over TLS: {:?}",
-                    len,
-                    String::from_utf8(buf[0..len].to_vec())
-                );
-            }
-            return false;
-        }
-        Err(e) => {
-            eprintln!("read_to_end error: {}", e);
+fn receive_tls(conn_ref: &mut ClientConnection, buf: &mut [u8]) -> bool {
+    if let Some(ref mut session) = conn_ref.session {
+        let rc = session.read_tls(&mut conn_ref.stream);
+        if rc.is_err() {
             return true;
         }
-    };
+        if rc.unwrap() == 0 {
+            return true;
+        }
+        let processed = session.process_new_packets();
+        if processed.is_err() {
+            return true;
+        }
+        let rc = session.read(&mut buf[..2048]);
+        match rc {
+            Ok(0) => return true,
+            Ok(len) => {
+                if let Some(msg) = syslog::parse(conn_ref.sa, len, buf) {
+                    println!("{:?}", msg);
+                } else {
+                    println!(
+                        "error parsing {} bytes over TLS: {:?}",
+                        len,
+                        String::from_utf8(buf[0..len].to_vec())
+                    );
+                }
+                return false;
+            }
+            Err(e) => {
+                eprintln!("read_to_end error: {}", e);
+                return true;
+            }
+        };
+    } else {
+        true
+    }
 }
