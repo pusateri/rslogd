@@ -1,4 +1,4 @@
-//! Stage 4 - syslog server rslogd
+//! Stage 5 - syslog server rslogd
 //!
 //! MUST run as root or use sudo
 //!
@@ -40,7 +40,7 @@ const UDP6: Token = Token(1);
 const TCP4: Token = Token(2);
 const TCP6: Token = Token(3);
 const TLS4: Token = Token(4);
-//const TLS6: Token = Token(5);
+const TLS6: Token = Token(5);
 
 struct ClientConnection {
     stream: TcpStream,
@@ -188,6 +188,15 @@ fn main() {
     poll.register(&tls_listener4, TLS4, Ready::readable(), PollOpt::edge())
         .expect("poll.register tls4 failed");
 
+    // TLS IPv6
+    let sa_tls6 = SocketAddr::new(
+        Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0).into(),
+        SYSLOG_TLS_PORT,
+    );
+    let tls_listener6 = TcpListener::bind(&sa_tls6).expect("TlsListener4");
+    poll.register(&tls_listener6, TLS6, Ready::readable(), PollOpt::edge())
+        .expect("poll.register tls4 failed");
+
     let mut tokens: HashMap<Token, ClientConnection> = HashMap::new();
     let mut pool = IndexPool::with_initial_index(6);
     loop {
@@ -247,6 +256,24 @@ fn main() {
                         tokens.insert(key, conn);
                     }
                     Err(_e) => eprintln!("tls4 connection error"),
+                },
+                TLS6 => match tls_listener6.accept() {
+                    Ok((stream, sa)) => {
+                        let tls_session = rustls::ServerSession::new(&tls_config);
+                        let idx = pool.new_id();
+                        let key = Token(idx);
+                        let stream_clone = stream.try_clone().expect("tls4 stream clone");
+                        poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())
+                            .expect("poll.register tls6 dynamic failed");
+                        let conn = ClientConnection {
+                            stream: stream_clone,
+                            session: Some(tls_session),
+                            sa: sa,
+                            token_index: idx,
+                        };
+                        tokens.insert(key, conn);
+                    }
+                    Err(_e) => eprintln!("tls6 connection error"),
                 },
                 tok => {
                     match tokens.get_mut(&tok) {

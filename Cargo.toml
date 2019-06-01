@@ -1,6 +1,6 @@
 [package]
 name = "rslogd"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Tom Pusateri <pusateri@bangj.com>"]
 edition = "2018"
 

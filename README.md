@@ -1,11 +1,44 @@
 # rslogd
 syslog server written in Rust as an introduction to [mio](https://github.com/tokio-rs/mio) for [Triangle Rustaceans](https://www.meetup.com/triangle-rustaceans/events/mfglwpyzlbjc/) August 2019 Meetup.
 
-Each stage provides a few more features to discuss. To run the syslog server, you'll need to be root or sudo in order to open port 514. Use the following commands to build and run:
+Each stage provides a few more features to discuss. To run the syslog server, you'll need to be root or sudo in order to open port 514 and port 601. Use the following commands to build and run:
 
 ```
 cargo build
-sudo target/debug/rslogd
+sudo target/debug/rslogd  --certs ./my.server.com/cert.pem --key ./my.server.com/privkey.pem
+```
+
+Test Commands
+=============
+For testing over udp, the following clients will work:
+
+```
+# Linux
+logger -s -n 192.168.1.3 testing
+
+# macOS
+syslog -s -r 192.168.1.3 testing
+```
+
+For testing over TCP, use the following command:
+
+```
+# Linux
+logger -s -T -P 601 -n 192.168.1.3 test TCP message
+```
+
+For testing with TLS, use the gnutls-cli command to encapsualte the syslog message:
+
+```
+# Linux, FreeBSD, or macOS
+gnutls-cli my.server.com --port=6514 --x509cafile=/home/username/Downloads/letsencryptauthorityx3.pem.txt
+```
+
+Then paste in the preformatted syslog line terminating with Ctl-D:
+
+```
+<7>May 29 09:20:57 client.example.com syslog[32674]: testing
+^D
 ```
 
 Stage 1
@@ -52,10 +85,10 @@ git checkout stage4
 
 Stage 5
 =======
-Stage 5 will add TLS over IPv6 support and an index pool for tokens. Work in Progress.
+Stage 5 adds TLS over IPv6 support and an index pool for tokens.
 
 To see Stage 5, use:
 
 ```
-git checkout master
+git checkout stage5
 ```
