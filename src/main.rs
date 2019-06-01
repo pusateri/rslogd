@@ -12,24 +12,22 @@
 //! If socket cannot bind to syslog UDP port 514 (permissions or already in use)
 //!
 
+use docopt::Docopt;
+use index_pool::IndexPool;
 use mio::net::{TcpListener, TcpStream, UdpSocket};
 use mio::{Events, Poll, PollOpt, Ready, Token};
-use socket2::{Domain, Protocol, Socket, Type};
-use std::collections::HashMap;
-use std::io::Read;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
-use index_pool::IndexPool;
-
-// TLS
 use rustls;
 use rustls::Session;
+use socket2::{Domain, Protocol, Socket, Type};
+use std::collections::HashMap;
 use std::fs;
 use std::io::BufReader;
+use std::io::Read;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 
 #[macro_use]
 extern crate serde_derive;
-use docopt::Docopt;
 
 mod syslog;
 
@@ -236,7 +234,6 @@ fn main() {
                     Ok((stream, sa)) => {
                         let tls_session = rustls::ServerSession::new(&tls_config);
                         let idx = pool.new_id();
-                        println!("index: {}", idx);
                         let key = Token(idx);
                         let stream_clone = stream.try_clone().expect("tls4 stream clone");
                         poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())
@@ -284,14 +281,16 @@ fn main() {
                                 // finished TLS handshake
                                 if receive_tls(conn_ref, &mut buffer) {
                                     poll.deregister(&conn_ref.stream).expect("deregister tls"); // not necessary
-                                    pool.return_id(conn_ref.token_index).expect("tls pool return id");
+                                    pool.return_id(conn_ref.token_index)
+                                        .expect("tls pool return id");
                                     tokens.remove(&tok);
                                 }
                             } else {
                                 // it's TCP (no session)
                                 if receive_tcp(conn_ref, &mut buffer) {
                                     poll.deregister(&conn_ref.stream).expect("deregister tcp"); // not necessary
-                                    pool.return_id(conn_ref.token_index).expect("tcp pool return id");
+                                    pool.return_id(conn_ref.token_index)
+                                        .expect("tcp pool return id");
                                     tokens.remove(&tok);
                                 }
                             }
