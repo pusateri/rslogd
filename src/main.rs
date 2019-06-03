@@ -162,10 +162,7 @@ fn main() {
     // TCP IPv4
     let tcp4_server_s = Socket::new(Domain::ipv4(), Type::stream(), Some(Protocol::tcp()))
         .expect("tcp4 Socket::new");
-    let sa_tcp4 = SocketAddr::new(
-        Ipv4Addr::new(0, 0, 0, 0).into(),
-        SYSLOG_TCP_PORT,
-    );
+    let sa_tcp4 = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), SYSLOG_TCP_PORT);
     tcp4_server_s
         .set_reuse_address(true)
         .expect("tcp v4 set_reuse_address");
@@ -214,10 +211,7 @@ fn main() {
     // TLS IPv4
     let tls4_server_s = Socket::new(Domain::ipv4(), Type::stream(), Some(Protocol::tcp()))
         .expect("tls4 Socket::new");
-    let sa_tls4 = SocketAddr::new(
-        Ipv4Addr::new(0, 0, 0, 0).into(),
-        SYSLOG_TLS_PORT,
-    );
+    let sa_tls4 = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), SYSLOG_TLS_PORT);
     tls4_server_s
         .set_reuse_address(true)
         .expect("tls v4 set_reuse_address");
@@ -253,8 +247,9 @@ fn main() {
     poll.register(&tls6_listener, TLS6, Ready::readable(), PollOpt::edge())
         .expect("poll.register tls6 failed");
 
+    // begin main event loop
     let mut tokens: HashMap<Token, ClientConnection> = HashMap::new();
-    let mut pool = IndexPool::with_initial_index(6);
+    let mut pool = IndexPool::with_initial_index(6);    // allocate unused index for accepted sockets
     loop {
         poll.poll(&mut events, None).expect("poll.poll failed");
         for event in events.iter() {
@@ -455,7 +450,7 @@ fn receive_tls(conn_ref: &mut ClientConnection, buf: &mut [u8]) -> bool {
                 return false;
             }
             Err(e) => {
-                eprintln!("read_to_end error: {}", e);
+                eprintln!("read error: {}", e);
                 return true;
             }
         };
