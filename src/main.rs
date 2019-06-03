@@ -158,14 +158,10 @@ fn main() {
     poll.register(&udp6_server_mio, UDP6, Ready::readable(), PollOpt::edge())
         .expect("poll.register udp6 failed");
 
-
     // TCP IPv4
     let tcp4_server_s = Socket::new(Domain::ipv4(), Type::stream(), Some(Protocol::tcp()))
         .expect("tcp4 Socket::new");
-    let sa_tcp4 = SocketAddr::new(
-        Ipv4Addr::new(0, 0, 0, 0).into(),
-        SYSLOG_TCP_PORT,
-    );
+    let sa_tcp4 = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), SYSLOG_TCP_PORT);
     tcp4_server_s
         .set_reuse_address(true)
         .expect("tcp v4 set_reuse_address");
@@ -214,10 +210,7 @@ fn main() {
     // TLS IPv4
     let tls4_server_s = Socket::new(Domain::ipv4(), Type::stream(), Some(Protocol::tcp()))
         .expect("tls4 Socket::new");
-    let sa_tls4 = SocketAddr::new(
-        Ipv4Addr::new(0, 0, 0, 0).into(),
-        SYSLOG_TLS_PORT,
-    );
+    let sa_tls4 = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), SYSLOG_TLS_PORT);
     tls4_server_s
         .set_reuse_address(true)
         .expect("tls v4 set_reuse_address");
@@ -230,7 +223,7 @@ fn main() {
     let tls4_listener =
         TcpListener::from_std(tls4_server_s.into_tcp_listener()).expect("tls mio v4 from_socket");
     poll.register(&tls4_listener, TLS4, Ready::readable(), PollOpt::edge())
-.expect("poll.register tls4 failed");
+        .expect("poll.register tls4 failed");
 
     let mut tok_dyn = 10;
     let mut tokens: HashMap<Token, ClientConnection> = HashMap::new();
