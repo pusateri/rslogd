@@ -14,24 +14,24 @@ For testing over udp, the following clients will work:
 
 ```
 # Linux
-logger -s -n 192.168.1.3 testing
+logger -s -i -n 127.0.0.1 testing
 
 # macOS
-syslog -s -r 192.168.1.3 testing
+syslog -s -r 127.0.0.1 testing
 ```
 
 For testing over TCP, use the following command:
 
 ```
 # Linux
-logger -s -T -P 601 -n 192.168.1.3 test TCP message
+logger -s -T -P 601 -i -n 127.0.0.1 test TCP message
 ```
 
 For testing with TLS, use the gnutls-cli command to encapsualte the syslog message:
 
 ```
 # Linux, FreeBSD, or macOS
-gnutls-cli my.server.com --port=6514 --x509cafile=/home/username/Downloads/letsencryptauthorityx3.pem.txt
+gnutls-cli my.server.com --port=6514 --x509cafile=./letsencryptauthorityx3.pem.txt
 ```
 
 Then paste in the preformatted syslog line terminating with Ctl-D:
