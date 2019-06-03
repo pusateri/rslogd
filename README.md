@@ -31,7 +31,7 @@ For testing with TLS, use the gnutls-cli command to encapsualte the syslog messa
 
 ```
 # Linux, FreeBSD, or macOS
-gnutls-cli my.server.com --port=6514 --x509cafile=./letsencryptauthorityx3.pem.txt
+gnutls-cli my.server.com --port=6514 --x509cafile=./letsencrypt/letsencryptauthorityx3.pem.txt
 ```
 
 Then paste in the preformatted syslog line terminating with Ctl-D:
