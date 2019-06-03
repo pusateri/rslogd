@@ -152,25 +152,54 @@ fn main() {
         .set_reuse_port(true)
         .expect("udp set_reuse_port");
     udp6_server_s.set_only_v6(true).expect("udp set_only_v6");
-    udp6_server_s.bind(&sa6.into()).expect("v6 bind");
+    udp6_server_s.bind(&sa6.into()).expect("udp v6 bind");
     let udp6_server_mio =
         UdpSocket::from_socket(udp6_server_s.into_udp_socket()).expect("mio v6 from_socket");
 
     poll.register(&udp6_server_mio, UDP6, Ready::readable(), PollOpt::edge())
         .expect("poll.register udp6 failed");
 
-    // TCP
-    let sa_tcp4 = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), SYSLOG_TCP_PORT);
-    let listener4 = TcpListener::bind(&sa_tcp4).expect("TcpListener4");
-    poll.register(&listener4, TCP4, Ready::readable(), PollOpt::edge())
+    // TCP IPv4
+    let tcp4_server_s = Socket::new(Domain::ipv4(), Type::stream(), Some(Protocol::tcp()))
+        .expect("tcp4 Socket::new");
+    let sa_tcp4 = SocketAddr::new(
+        Ipv4Addr::new(0, 0, 0, 0).into(),
+        SYSLOG_TCP_PORT,
+    );
+    tcp4_server_s
+        .set_reuse_address(true)
+        .expect("tcp v4 set_reuse_address");
+    #[cfg(unix)]
+    tcp4_server_s
+        .set_reuse_port(true)
+        .expect("tcp v4 set_reuse_port");
+    tcp4_server_s.bind(&sa_tcp4.into()).expect("tcp v4 bind");
+    tcp4_server_s.listen(128).expect("tcp v4 listen");
+    let tcp4_listener =
+        TcpListener::from_std(tcp4_server_s.into_tcp_listener()).expect("tcp mio v4 from_socket");
+    poll.register(&tcp4_listener, TCP4, Ready::readable(), PollOpt::edge())
         .expect("poll.register tcp4 failed");
 
+    // TCP IPv6
+    let tcp6_server_s = Socket::new(Domain::ipv6(), Type::stream(), Some(Protocol::tcp()))
+        .expect("tcp6 Socket::new");
     let sa_tcp6 = SocketAddr::new(
         Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0).into(),
         SYSLOG_TCP_PORT,
     );
-    let listener6 = TcpListener::bind(&sa_tcp6).expect("TcpListener6");
-    poll.register(&listener6, TCP6, Ready::readable(), PollOpt::edge())
+    tcp6_server_s
+        .set_reuse_address(true)
+        .expect("tcp v6 set_reuse_address");
+    #[cfg(unix)]
+    tcp6_server_s
+        .set_reuse_port(true)
+        .expect("tcp set_reuse_port");
+    tcp6_server_s.set_only_v6(true).expect("tcp set_only_v6");
+    tcp6_server_s.bind(&sa_tcp6.into()).expect("tcp v6 bind");
+    tcp6_server_s.listen(128).expect("tcp v6 listen");
+    let tcp6_listener =
+        TcpListener::from_std(tcp6_server_s.into_tcp_listener()).expect("mio v6 from_socket");
+    poll.register(&tcp6_listener, TCP6, Ready::readable(), PollOpt::edge())
         .expect("poll.register tcp6 failed");
 
     // general TLS setup
@@ -183,19 +212,46 @@ fn main() {
     let tls_config = Arc::new(tls_conf);
 
     // TLS IPv4
-    let sa_tls4 = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), SYSLOG_TLS_PORT);
-    let tls_listener4 = TcpListener::bind(&sa_tls4).expect("TlsListener4");
-    poll.register(&tls_listener4, TLS4, Ready::readable(), PollOpt::edge())
+    let tls4_server_s = Socket::new(Domain::ipv4(), Type::stream(), Some(Protocol::tcp()))
+        .expect("tls4 Socket::new");
+    let sa_tls4 = SocketAddr::new(
+        Ipv4Addr::new(0, 0, 0, 0).into(),
+        SYSLOG_TLS_PORT,
+    );
+    tls4_server_s
+        .set_reuse_address(true)
+        .expect("tls v4 set_reuse_address");
+    #[cfg(unix)]
+    tls4_server_s
+        .set_reuse_port(true)
+        .expect("tls v4 set_reuse_port");
+    tls4_server_s.bind(&sa_tls4.into()).expect("tls v4 bind");
+    tls4_server_s.listen(128).expect("tls v4 listen");
+    let tls4_listener =
+        TcpListener::from_std(tls4_server_s.into_tcp_listener()).expect("tls mio v4 from_socket");
+    poll.register(&tls4_listener, TLS4, Ready::readable(), PollOpt::edge())
         .expect("poll.register tls4 failed");
 
     // TLS IPv6
+    let tls6_server_s = Socket::new(Domain::ipv6(), Type::stream(), Some(Protocol::tcp()))
+        .expect("tls6 Socket::new");
     let sa_tls6 = SocketAddr::new(
         Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0).into(),
         SYSLOG_TLS_PORT,
     );
-    let tls_listener6 = TcpListener::bind(&sa_tls6).expect("TlsListener4");
-    poll.register(&tls_listener6, TLS6, Ready::readable(), PollOpt::edge())
-        .expect("poll.register tls4 failed");
+    tls6_server_s
+        .set_reuse_address(true)
+        .expect("tls v6 set_reuse_address");
+    #[cfg(unix)]
+    tls6_server_s
+        .set_reuse_port(true)
+        .expect("tls v6 set_reuse_port");
+    tls6_server_s.bind(&sa_tls6.into()).expect("tls v6 bind");
+    tls6_server_s.listen(128).expect("tls v6 listen");
+    let tls6_listener =
+        TcpListener::from_std(tls6_server_s.into_tcp_listener()).expect("tls mio v6 from_socket");
+    poll.register(&tls6_listener, TLS6, Ready::readable(), PollOpt::edge())
+        .expect("poll.register tls6 failed");
 
     let mut tokens: HashMap<Token, ClientConnection> = HashMap::new();
     let mut pool = IndexPool::with_initial_index(6);
@@ -205,7 +261,7 @@ fn main() {
             match event.token() {
                 UDP4 => receive_udp(&udp4_server_mio, &mut buffer),
                 UDP6 => receive_udp(&udp6_server_mio, &mut buffer),
-                TCP4 => match listener4.accept() {
+                TCP4 => match tcp4_listener.accept() {
                     Ok((stream, sa)) => {
                         let idx = pool.new_id();
                         let key = Token(idx);
@@ -222,7 +278,7 @@ fn main() {
                     }
                     Err(_e) => eprintln!("tcp4 connection error"),
                 },
-                TCP6 => match listener6.accept() {
+                TCP6 => match tcp6_listener.accept() {
                     Ok((stream, sa)) => {
                         let idx = pool.new_id();
                         let key = Token(idx);
@@ -239,7 +295,7 @@ fn main() {
                     }
                     Err(_e) => eprintln!("tcp6 connection error"),
                 },
-                TLS4 => match tls_listener4.accept() {
+                TLS4 => match tls4_listener.accept() {
                     Ok((stream, sa)) => {
                         let tls_session = rustls::ServerSession::new(&tls_config);
                         let idx = pool.new_id();
@@ -257,7 +313,7 @@ fn main() {
                     }
                     Err(_e) => eprintln!("tls4 connection error"),
                 },
-                TLS6 => match tls_listener6.accept() {
+                TLS6 => match tls6_listener.accept() {
                     Ok((stream, sa)) => {
                         let tls_session = rustls::ServerSession::new(&tls_config);
                         let idx = pool.new_id();
