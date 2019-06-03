@@ -55,15 +55,17 @@ fn main() {
         .expect("poll.register udp4 failed");
 
     // listen over IPv6 too
-    let udp6_server_s =
-        Socket::new(Domain::ipv6(), Type::dgram(), Some(Protocol::udp())).expect("udp6 Socket::new");
+    let udp6_server_s = Socket::new(Domain::ipv6(), Type::dgram(), Some(Protocol::udp()))
+        .expect("udp6 Socket::new");
     let sa6 = SocketAddr::new(
         Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0).into(),
         SYSLOG_UDP_PORT,
     );
 
     #[cfg(unix)]
-    udp6_server_s.set_reuse_port(true).expect("udp set_reuse_port");
+    udp6_server_s
+        .set_reuse_port(true)
+        .expect("udp set_reuse_port");
     udp6_server_s.set_only_v6(true).expect("udp set_only_v6");
     udp6_server_s.bind(&sa6.into()).expect("v6 bind");
     let udp6_server_mio =
@@ -72,13 +74,10 @@ fn main() {
     poll.register(&udp6_server_mio, UDP6, Ready::readable(), PollOpt::edge())
         .expect("poll.register udp6 failed");
 
-// TCP IPv4
+    // TCP IPv4
     let tcp4_server_s = Socket::new(Domain::ipv4(), Type::stream(), Some(Protocol::tcp()))
         .expect("tcp4 Socket::new");
-    let sa_tcp4 = SocketAddr::new(
-        Ipv4Addr::new(0, 0, 0, 0).into(),
-        SYSLOG_TCP_PORT,
-    );
+    let sa_tcp4 = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), SYSLOG_TCP_PORT);
     tcp4_server_s
         .set_reuse_address(true)
         .expect("tcp v4 set_reuse_address");
@@ -113,7 +112,7 @@ fn main() {
     let tcp6_listener =
         TcpListener::from_std(tcp6_server_s.into_tcp_listener()).expect("mio v6 from_socket");
     poll.register(&tcp6_listener, TCP6, Ready::readable(), PollOpt::edge())
-.expect("poll.register tcp6 failed");
+        .expect("poll.register tcp6 failed");
 
     let mut tok_dyn = 10;
     let mut tcp_tokens: HashMap<Token, TcpConn> = HashMap::new();
