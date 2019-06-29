@@ -116,10 +116,9 @@ fn main() -> Result<(), Error> {
                 TCP4 => match tcp4_listener.accept() {
                     Ok((stream, sa)) => {
                         let key = Token(tok_dyn);
-                        let stream_clone = stream.try_clone()?;
-                        poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())?;
+                        poll.register(&stream, key, Ready::readable(), PollOpt::edge())?;
                         let conn = TcpConn {
-                            stream: stream_clone,
+                            stream: stream,
                             sa: sa,
                         };
                         tcp_tokens.insert(key, conn);
@@ -130,10 +129,9 @@ fn main() -> Result<(), Error> {
                 TCP6 => match tcp6_listener.accept() {
                     Ok((stream, sa)) => {
                         let key = Token(tok_dyn);
-                        let stream_clone = stream.try_clone()?;
-                        poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())?;
+                        poll.register(&stream, key, Ready::readable(), PollOpt::edge())?;
                         let conn = TcpConn {
-                            stream: stream_clone,
+                            stream: stream,
                             sa: sa,
                         };
                         tcp_tokens.insert(key, conn);
