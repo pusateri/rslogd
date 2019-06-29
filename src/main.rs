@@ -97,8 +97,7 @@ fn main() -> Result<(), Error> {
 
     let mut tok_dyn = 10;
     let mut tcp_tokens: HashMap<Token, TcpConn> = HashMap::new();
-    let mut shutdown = false;
-    while !shutdown {
+    loop {
         poll.poll(&mut events, None)?;
         for event in events.iter() {
             match event.token() {
@@ -106,14 +105,12 @@ fn main() -> Result<(), Error> {
                     Ok(()) => continue,
                     Err(e) => {
                         eprintln!("IPv4 receive {}", e);
-                        shutdown = true;
                     }
                 },
                 UDP6 => match receive_udp(&udp6_server_mio, &mut buffer) {
                     Ok(()) => continue,
                     Err(e) => {
                         eprintln!("IPv6 receive {}", e);
-                        shutdown = true;
                     }
                 },
                 TCP4 => match tcp4_listener.accept() {
@@ -157,7 +154,6 @@ fn main() -> Result<(), Error> {
             }
         }
     }
-    Ok(())
 }
 
 // common receive routine
@@ -186,22 +182,33 @@ fn receive_udp(sock: &UdpSocket, buf: &mut [u8]) -> Result<(), Error> {
 }
 
 fn receive_tcp(conn_ref: &mut TcpConn, buf: &mut [u8]) -> bool {
-    match conn_ref.stream.read(buf) {
-        Ok(0) => true,
-        Ok(len) => {
-            if let Some(msg) = syslog::parse(conn_ref.sa, len, buf) {
-                println!("{:?}", msg);
-            } else {
-                println!(
-                    "error parsing: {:?}",
-                    String::from_utf8(buf[0..len].to_vec())
-                );
+    loop {
+        match conn_ref.stream.read(buf) {
+            Ok(0) => {
+                // client closed connection, cleanup
+                return true;
+            },
+            Ok(len) => {
+                // we have a message to process
+                if let Some(msg) = syslog::parse(conn_ref.sa, len, buf) {
+                    println!("{:?}", msg);
+                } else {
+                    println!(
+                        "error parsing: {:?}",
+                        String::from_utf8(buf[0..len].to_vec())
+                    );
+                }
+            },
+            Err(e) => {
+                if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted {
+                    // nothing else to read but connection still open
+                    return false;
+                } else {
+                    eprintln!("TCP read error: {}", e);
+                    // cleanup
+                    return true;
+                }
             }
-            false
-        }
-        Err(e) => {
-            eprintln!("read error: {}", e);
-            true
         }
     }
 }
