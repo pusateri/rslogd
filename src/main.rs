@@ -185,7 +185,7 @@ fn receive_tcp(conn_ref: &mut TcpConn, buf: &mut [u8]) -> bool {
             Ok(0) => {
                 // client closed connection, cleanup
                 return true;
-            },
+            }
             Ok(len) => {
                 // we have a message to process
                 if let Some(msg) = syslog::parse(conn_ref.sa, len, buf) {
@@ -196,7 +196,7 @@ fn receive_tcp(conn_ref: &mut TcpConn, buf: &mut [u8]) -> bool {
                         String::from_utf8(buf[0..len].to_vec())
                     );
                 }
-            },
+            }
             Err(e) => {
                 if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted {
                     // nothing else to read but connection still open
