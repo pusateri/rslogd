@@ -4,7 +4,7 @@
 //!
 //! ```
 //! cargo build
-//! sudo target/debug/rslogd
+//! sudo target/debug/rslogd --certs ./fullchain.pem --key ./privkey.pem
 //! ```
 //!
 //! # panics
@@ -17,6 +17,7 @@ use mio::{Events, Poll, PollOpt, Ready, Token};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::HashMap;
 use std::io::Read;
+use std::io::{Error, ErrorKind};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 // TLS
 use rustls;
@@ -110,7 +111,7 @@ struct Args {
     flag_key: Option<String>,
 }
 
-fn main() {
+fn main() -> Result<(), Error> {
     let version = env!("CARGO_PKG_NAME").to_string() + ", version: " + env!("CARGO_PKG_VERSION");
 
     let args: Args = Docopt::new(USAGE)
@@ -119,84 +120,65 @@ fn main() {
         .and_then(|d| d.deserialize())
         .unwrap_or_else(|e| e.exit());
 
-    let mut events = Events::with_capacity(1024);
-    let poll = Poll::new().expect("Poll::new() failed");
+    let mut events = Events::with_capacity(256);
+    let poll = Poll::new()?;
     let mut buffer = [0; 4096];
 
-    // UDP
-    let udp4_server_s =
-        Socket::new(Domain::ipv4(), Type::dgram(), Some(Protocol::udp())).expect("Socket::new");
+    // UDP IPv4
+    let udp4_server_s = Socket::new(Domain::ipv4(), Type::dgram(), Some(Protocol::udp()))?;
     let sa_udp4 = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), SYSLOG_UDP_PORT);
 
     #[cfg(unix)]
-    udp4_server_s
-        .set_reuse_port(true)
-        .expect("v4 set_reuse_port");
-    udp4_server_s.bind(&sa_udp4.into()).expect("v4 bind");
-    let udp4_server_mio =
-        UdpSocket::from_socket(udp4_server_s.into_udp_socket()).expect("mio v4 from_socket");
+    udp4_server_s.set_reuse_port(true)?;
+    udp4_server_s.set_reuse_address(true)?;
+    udp4_server_s.bind(&sa_udp4.into())?;
+    let udp4_server_mio = UdpSocket::from_socket(udp4_server_s.into_udp_socket())?;
 
-    poll.register(&udp4_server_mio, UDP4, Ready::readable(), PollOpt::edge())
-        .expect("poll.register udp4 failed");
+    poll.register(&udp4_server_mio, UDP4, Ready::readable(), PollOpt::edge())?;
 
-    let udp6_server_s = Socket::new(Domain::ipv6(), Type::dgram(), Some(Protocol::udp()))
-        .expect("udp6 Socket::new");
+    // UDP IPv6
+    let udp6_server_s = Socket::new(Domain::ipv6(), Type::dgram(), Some(Protocol::udp()))?;
     let sa6 = SocketAddr::new(
         Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0).into(),
         SYSLOG_UDP_PORT,
     );
 
     #[cfg(unix)]
-    udp6_server_s
-        .set_reuse_port(true)
-        .expect("udp set_reuse_port");
-    udp6_server_s.set_only_v6(true).expect("udp set_only_v6");
-    udp6_server_s.bind(&sa6.into()).expect("v6 bind");
-    let udp6_server_mio =
-        UdpSocket::from_socket(udp6_server_s.into_udp_socket()).expect("mio v6 from_socket");
+    udp6_server_s.set_reuse_port(true)?;
+    udp6_server_s.set_reuse_address(true)?;
+    udp6_server_s.set_only_v6(true)?;
+    udp6_server_s.bind(&sa6.into())?;
+    let udp6_server_mio = UdpSocket::from_socket(udp6_server_s.into_udp_socket())?;
 
-    poll.register(&udp6_server_mio, UDP6, Ready::readable(), PollOpt::edge())
-        .expect("poll.register udp6 failed");
+    poll.register(&udp6_server_mio, UDP6, Ready::readable(), PollOpt::edge())?;
 
     // TCP IPv4
-    let tcp4_server_s = Socket::new(Domain::ipv4(), Type::stream(), Some(Protocol::tcp()))
-        .expect("tcp4 Socket::new");
+    let tcp4_server_s = Socket::new(Domain::ipv4(), Type::stream(), Some(Protocol::tcp()))?;
     let sa_tcp4 = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), SYSLOG_TCP_PORT);
-    tcp4_server_s
-        .set_reuse_address(true)
-        .expect("tcp v4 set_reuse_address");
+    tcp4_server_s.set_reuse_address(true)?;
+
     #[cfg(unix)]
-    tcp4_server_s
-        .set_reuse_port(true)
-        .expect("tcp v4 set_reuse_port");
-    tcp4_server_s.bind(&sa_tcp4.into()).expect("tcp v4 bind");
-    tcp4_server_s.listen(128).expect("tcp v4 listen");
-    let tcp4_listener =
-        TcpListener::from_std(tcp4_server_s.into_tcp_listener()).expect("tcp mio v4 from_socket");
-    poll.register(&tcp4_listener, TCP4, Ready::readable(), PollOpt::edge())
-        .expect("poll.register tcp4 failed");
+    tcp4_server_s.set_reuse_port(true)?;
+    tcp4_server_s.bind(&sa_tcp4.into())?;
+    tcp4_server_s.listen(128)?;
+    let tcp4_listener = TcpListener::from_std(tcp4_server_s.into_tcp_listener())?;
+    poll.register(&tcp4_listener, TCP4, Ready::readable(), PollOpt::edge())?;
 
     // TCP IPv6
-    let tcp6_server_s = Socket::new(Domain::ipv6(), Type::stream(), Some(Protocol::tcp()))
-        .expect("tcp6 Socket::new");
+    let tcp6_server_s = Socket::new(Domain::ipv6(), Type::stream(), Some(Protocol::tcp()))?;
     let sa_tcp6 = SocketAddr::new(
         Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0).into(),
         SYSLOG_TCP_PORT,
     );
-    tcp6_server_s
-        .set_reuse_address(true)
-        .expect("tcp v6 set_reuse_address");
+    tcp6_server_s.set_reuse_address(true)?;
+
     #[cfg(unix)]
-    tcp6_server_s
-        .set_reuse_port(true)
-        .expect("tcp set_reuse_port");
-    tcp6_server_s.set_only_v6(true).expect("tcp set_only_v6");
-    tcp6_server_s.bind(&sa_tcp6.into()).expect("tcp v6 bind");
-    tcp6_server_s.listen(128).expect("tcp v6 listen");
-    let tcp6_listener =
-        TcpListener::from_std(tcp6_server_s.into_tcp_listener()).expect("mio v6 from_socket");
-    poll.register(&tcp6_listener, TCP6, Ready::readable(), PollOpt::edge())
-        .expect("poll.register tcp6 failed");
+    tcp6_server_s.set_reuse_port(true)?;
+    tcp6_server_s.set_only_v6(true)?;
+    tcp6_server_s.bind(&sa_tcp6.into())?;
+    tcp6_server_s.listen(128)?;
+    let tcp6_listener = TcpListener::from_std(tcp6_server_s.into_tcp_listener())?;
+    poll.register(&tcp6_listener, TCP6, Ready::readable(), PollOpt::edge())?;
 
     // general TLS setup
     let mut tls_conf = rustls::ServerConfig::new(rustls::NoClientAuth::new());
@@ -208,39 +190,40 @@ fn main() {
     let tls_config = Arc::new(tls_conf);
 
     // TLS IPv4
-    let tls4_server_s = Socket::new(Domain::ipv4(), Type::stream(), Some(Protocol::tcp()))
-        .expect("tls4 Socket::new");
+    let tls4_server_s = Socket::new(Domain::ipv4(), Type::stream(), Some(Protocol::tcp()))?;
     let sa_tls4 = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), SYSLOG_TLS_PORT);
-    tls4_server_s
-        .set_reuse_address(true)
-        .expect("tls v4 set_reuse_address");
+    tls4_server_s.set_reuse_address(true)?;
     #[cfg(unix)]
-    tls4_server_s
-        .set_reuse_port(true)
-        .expect("tls v4 set_reuse_port");
-    tls4_server_s.bind(&sa_tls4.into()).expect("tls v4 bind");
-    tls4_server_s.listen(128).expect("tls v4 listen");
-    let tls4_listener =
-        TcpListener::from_std(tls4_server_s.into_tcp_listener()).expect("tls mio v4 from_socket");
-    poll.register(&tls4_listener, TLS4, Ready::readable(), PollOpt::edge())
-        .expect("poll.register tls4 failed");
+    tls4_server_s.set_reuse_port(true)?;
+    tls4_server_s.bind(&sa_tls4.into())?;
+    tls4_server_s.listen(128)?;
+    let tls4_listener = TcpListener::from_std(tls4_server_s.into_tcp_listener())?;
+    poll.register(&tls4_listener, TLS4, Ready::readable(), PollOpt::edge())?;
 
     let mut tok_dyn = 10;
     let mut tokens: HashMap<Token, ClientConnection> = HashMap::new();
     loop {
-        poll.poll(&mut events, None).expect("poll.poll failed");
+        poll.poll(&mut events, None)?;
         for event in events.iter() {
             match event.token() {
-                UDP4 => receive_udp(&udp4_server_mio, &mut buffer),
-                UDP6 => receive_udp(&udp6_server_mio, &mut buffer),
+                UDP4 => match receive_udp(&udp4_server_mio, &mut buffer) {
+                    Ok(()) => continue,
+                    Err(e) => {
+                        eprintln!("IPv4 receive {}", e);
+                    }
+                },
+                UDP6 => match receive_udp(&udp6_server_mio, &mut buffer) {
+                    Ok(()) => continue,
+                    Err(e) => {
+                        eprintln!("IPv6 receive {}", e);
+                    }
+                },
                 TCP4 => match tcp4_listener.accept() {
                     Ok((stream, sa)) => {
                         let key = Token(tok_dyn);
-                        let stream_clone = stream.try_clone().expect("tcp4 stream clone");
-                        poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())
-                            .expect("poll.register tcp4 dynamic failed");
+                        poll.register(&stream, key, Ready::readable(), PollOpt::edge())?;
                         let conn = ClientConnection {
-                            stream: stream_clone,
+                            stream: stream,
                             session: None,
                             sa: sa,
                         };
@@ -252,11 +235,9 @@ fn main() {
                 TCP6 => match tcp6_listener.accept() {
                     Ok((stream, sa)) => {
                         let key = Token(tok_dyn);
-                        let stream_clone = stream.try_clone().expect("tcp6 stream clone");
-                        poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())
-                            .expect("poll.register tcp6 dynamic failed");
+                        poll.register(&stream, key, Ready::readable(), PollOpt::edge())?;
                         let conn = ClientConnection {
-                            stream: stream_clone,
+                            stream: stream,
                             session: None,
                             sa: sa,
                         };
@@ -270,8 +251,7 @@ fn main() {
                         let tls_session = rustls::ServerSession::new(&tls_config);
                         let key = Token(tok_dyn);
                         let stream_clone = stream.try_clone().expect("tls4 stream clone");
-                        poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())
-                            .expect("poll.register tls4 dynamic failed");
+                        poll.register(&stream_clone, key, Ready::readable(), PollOpt::edge())?;
                         let conn = ClientConnection {
                             stream: stream_clone,
                             session: Some(tls_session),
@@ -314,13 +294,13 @@ fn main() {
                                 }
                                 // finished TLS handshake
                                 if receive_tls(conn_ref, &mut buffer) {
-                                    poll.deregister(&conn_ref.stream).expect("deregister tls"); // not necessary
+                                    poll.deregister(&conn_ref.stream)?;
                                     tokens.remove(&tok);
                                 }
                             } else {
                                 // it's TCP (no session)
                                 if receive_tcp(conn_ref, &mut buffer) {
-                                    poll.deregister(&conn_ref.stream).expect("deregister tcp"); // not necessary
+                                    poll.deregister(&conn_ref.stream)?;
                                     tokens.remove(&tok);
                                 }
                             }
@@ -334,79 +314,119 @@ fn main() {
 }
 
 // common receive routine
-fn receive_udp(sock: &UdpSocket, buf: &mut [u8]) {
-    let (len, from) = sock.recv_from(buf).expect("recvfrom errors");
+fn receive_udp(sock: &UdpSocket, buf: &mut [u8]) -> Result<(), Error> {
+    loop {
+        let (len, from) = match sock.recv_from(buf) {
+            Ok((len, from)) => (len, from),
+            Err(e) => {
+                if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted {
+                    return Ok(());
+                } else {
+                    return Err(e);
+                }
+            }
+        };
 
-    if let Some(msg) = syslog::parse(from, len, buf) {
-        println!("{:?}", msg);
-    } else {
-        println!(
-            "error parsing {} bytes over UDP: {:?}",
-            len,
-            String::from_utf8(buf[0..len].to_vec())
-        );
+        if let Some(msg) = syslog::parse(from, len, buf) {
+            println!("{:?}", msg);
+        } else {
+            match std::str::from_utf8(buf) {
+                Ok(s) => eprintln!("error parsing: {}", s),
+                Err(e) => eprintln!("received message not parseable and not UTF-8: {}", e),
+            }
+        }
     }
 }
 
 fn receive_tcp(conn_ref: &mut ClientConnection, buf: &mut [u8]) -> bool {
-    match conn_ref.stream.read(buf) {
-        Ok(0) => {
-            println!("read returned 0");
-            true
-        }
-        Ok(len) => {
-            if let Some(msg) = syslog::parse(conn_ref.sa, len, buf) {
-                println!("{:?}", msg);
-            } else {
-                println!(
-                    "error parsing {} bytes over TCP: {:?}",
-                    len,
-                    String::from_utf8(buf[0..len].to_vec())
-                );
+    loop {
+        match conn_ref.stream.read(buf) {
+            Ok(0) => {
+                // client closed connection, cleanup
+                return true;
             }
-            false
-        }
-        Err(e) => {
-            eprintln!("read error: {}", e);
-            true
+            Ok(len) => {
+                // we have a message to process
+                if let Some(msg) = syslog::parse(conn_ref.sa, len, buf) {
+                    println!("{:?}", msg);
+                } else {
+                    println!(
+                        "error parsing: {:?}",
+                        String::from_utf8(buf[0..len].to_vec())
+                    );
+                }
+            }
+            Err(e) => {
+                if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted {
+                    // nothing else to read but connection still open
+                    return false;
+                } else {
+                    eprintln!("TCP read error: {}", e);
+                    // cleanup
+                    return true;
+                }
+            }
         }
     }
 }
 
 fn receive_tls(conn_ref: &mut ClientConnection, buf: &mut [u8]) -> bool {
     if let Some(ref mut session) = conn_ref.session {
-        let rc = session.read_tls(&mut conn_ref.stream);
-        if rc.is_err() {
-            return true;
-        }
-        if rc.unwrap() == 0 {
-            return true;
-        }
-        let processed = session.process_new_packets();
-        if processed.is_err() {
-            return true;
-        }
-        let rc = session.read(&mut buf[..2048]);
-        match rc {
-            Ok(0) => return true,
-            Ok(len) => {
-                if let Some(msg) = syslog::parse(conn_ref.sa, len, buf) {
-                    println!("{:?}", msg);
-                } else {
-                    println!(
-                        "error parsing {} bytes over TLS: {:?}",
-                        len,
-                        String::from_utf8(buf[0..len].to_vec())
-                    );
+        loop {
+            match session.read_tls(&mut conn_ref.stream) {
+                Ok(0) => {
+                    // client closed connection, cleanup
+                    session.send_close_notify();
+                    return true;
                 }
-                return false;
+                Ok(_len) => {
+                    // successfully read len bytes, fall through
+                }
+                Err(e) => {
+                    if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted {
+                        // nothing else to read but connection still open
+                        return false;
+                    } else {
+                        eprintln!("TLS read_tls error: {}", e);
+                        // cleanup
+                        return true;
+                    }
+                }
             }
-            Err(e) => {
-                eprintln!("read_to_end error: {}", e);
+
+            let processed = session.process_new_packets();
+            if processed.is_err() {
+                eprintln!("tls process new packets error");
                 return true;
             }
-        };
+            let rc = session.read(&mut buf[..2048]);
+            match rc {
+                Ok(0) => {
+                    eprintln!("tls session read 0 length");
+                    return true;
+                }
+                Ok(len) => {
+                    if let Some(msg) = syslog::parse(conn_ref.sa, len, buf) {
+                        println!("{:?}", msg);
+                    } else {
+                        eprintln!(
+                            "error parsing {} bytes over TLS: {:?}",
+                            len,
+                            String::from_utf8(buf[0..len].to_vec())
+                        );
+                    }
+                }
+                Err(e) => {
+                    // if client didn't close connection, print error
+                    if e.kind() != ErrorKind::ConnectionAborted {
+                        eprintln!("tls session.read() error: {:?}", e.kind());
+                    }
+                    return true;
+                }
+            }
+        }
     } else {
+        eprintln!("can't find tls session error");
         true
     }
 }

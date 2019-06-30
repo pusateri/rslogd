@@ -1,11 +1,12 @@
 # rslogd
 syslog server written in Rust as an introduction to [mio](https://github.com/tokio-rs/mio) for [Triangle Rustaceans](https://www.meetup.com/triangle-rustaceans/events/mfglwpyzlbjc/) August 2019 Meetup.
 
-Each stage provides a few more features to discuss. To run the syslog server, you'll need to be root or sudo in order to open port 514. Use the following commands to build and run:
+Each stage provides a few more features to discuss. To run the syslog server, you'll need to be root or sudo in order to open port 514 (and 601). Use the following commands to build and run:
 
 ```
 cargo build
-sudo target/debug/rslogd
+sudo target/debug/rslogd     # (stage 1-3)
+sudo target/debug/rslogd --certs ./fullchain.pem --key ./privkey.pem     # (stage 4 and later)
 ```
 
 Stage 1
